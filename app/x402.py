@@ -33,7 +33,7 @@ Required env vars when X402_ENABLED=true:
   X402_RECEIVING_ADDRESS                        - your EVM wallet address
     (`onchainos wallet status` / `wallet addresses` in your agent session)
   X402_PRICE_USDC                               - human-readable USD price,
-    e.g. "0.5"
+    e.g. "0.1"
 """
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def build_middleware():
     server.register("eip155:196", ExactEvmScheme())  # X Layer
     server.initialize()
 
-    price = os.getenv("X402_PRICE_USDC", "0.5")
+    price = os.getenv("X402_PRICE_USDC", "0.1")
     pay_to = os.environ["X402_RECEIVING_ADDRESS"]
 
     routes = {
