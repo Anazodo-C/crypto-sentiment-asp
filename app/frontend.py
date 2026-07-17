@@ -4,7 +4,17 @@ Deliberately a single self-contained HTML string (no build step, no
 external JS framework) so it works as-is inside a Vercel Python function -
 no separate static build/deploy pipeline needed. Calls the same POST
 /sentiment endpoint any other agent would call.
+
+The logo is embedded as base64 (see app/assets.py) rather than served
+from /public - Vercel's @vercel/python builder only bundles files it can
+trace as Python imports, so a binary asset only ever read from disk at
+runtime silently doesn't make it into the deployed function. Embedding it
+as a string literal in a .py module sidesteps that failure mode entirely.
 """
+
+from app.assets import LOGO_PNG_BASE64
+
+_LOGO_DATA_URI = f"data:image/png;base64,{LOGO_PNG_BASE64}"
 
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -12,48 +22,42 @@ INDEX_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sentimento</title>
-<link rel="icon" href="/sentimento.png">
+<link rel="icon" href="__LOGO_DATA_URI__">
 <style>
   :root {
-    --bg: #0b0e14;
-    --panel: #131824;
-    --panel-2: #1a2130;
-    --border: #253048;
-    --text: #e6ebf5;
-    --muted: #8b96ab;
-    --accent: #6ee7b7;
-    --accent-2: #60a5fa;
+    /* OKX brand palette: black, white, signature bright green. No other
+       hues - the assessment colors below (amber/red) are functional data
+       indicators (bad/neutral signal), not decoration. */
+    --bg: #000000;
+    --panel: #111111;
+    --panel-2: #181818;
+    --border: #2a2a2a;
+    --text: #ffffff;
+    --muted: #8a8a8a;
+    --accent: #00d975;
+    --accent-2: #00d975;
     --warn: #f4b740;
     --bad: #f87171;
-    --good: #34d399;
-    --violet: #a78bfa;
-    --orange: #fb923c;
+    --good: #00d975;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background:
-      radial-gradient(700px circle at 12% -10%, rgba(52, 211, 153, 0.14), transparent 60%),
-      radial-gradient(700px circle at 88% 0%, rgba(167, 139, 250, 0.14), transparent 60%),
-      radial-gradient(900px circle at 50% 100%, rgba(251, 146, 60, 0.08), transparent 60%),
-      var(--bg);
-    background-attachment: fixed;
+    background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
     min-height: 100vh;
   }
   .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; position: relative; }
-  header { text-align: center; margin-bottom: 28px; position: relative; }
+  header { text-align: left; margin-bottom: 28px; position: relative; padding-left: 64px; min-height: 52px; }
   .logo-corner {
-    position: absolute; top: -6px; right: 0;
+    position: absolute; top: 0; left: 0;
     width: 52px; height: 52px; border-radius: 14px;
-    box-shadow: 0 0 0 1px var(--border), 0 6px 20px rgba(0,0,0,0.4);
+    box-shadow: 0 0 0 1px var(--border);
   }
   header h1 {
     font-size: 1.8rem; margin: 0 0 6px; letter-spacing: -0.01em; font-weight: 800;
-    background: linear-gradient(90deg, var(--good), var(--accent-2) 55%, var(--violet));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    display: inline-block;
+    color: var(--text);
   }
   header p { color: var(--muted); margin: 0; font-size: 0.95rem; }
 
@@ -71,21 +75,21 @@ INDEX_HTML = """<!DOCTYPE html>
     font-size: 1rem;
     outline: none;
   }
-  input#token-input:focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
+  input#token-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0, 217, 117, 0.15); }
   button#analyze-btn {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #06281d;
+    background: var(--accent);
+    color: #000000;
     border: none;
     padding: 14px 22px;
     border-radius: 10px;
     font-weight: 700;
     font-size: 1rem;
     cursor: pointer;
-    transition: transform 0.12s ease, box-shadow 0.12s ease;
+    transition: transform 0.12s ease, opacity 0.12s ease;
   }
   button#analyze-btn:hover:not(:disabled) {
     transform: translateY(-1px);
-    box-shadow: 0 6px 18px rgba(110, 231, 183, 0.25);
+    opacity: 0.9;
   }
   button#analyze-btn:disabled { opacity: 0.6; cursor: default; }
 
@@ -163,7 +167,7 @@ INDEX_HTML = """<!DOCTYPE html>
     padding: 16px 18px; flex: 1 1 260px; min-width: 0;
     transition: border-color 0.15s ease;
   }
-  .extra-card:hover { border-color: var(--violet); }
+  .extra-card:hover { border-color: var(--accent); }
   .extra-card h3 { margin: 0 0 8px; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
   .extra-card p, .extra-card li { font-size: 0.88rem; line-height: 1.5; margin: 0 0 4px; }
   .extra-card ul { margin: 0; padding-left: 18px; }
@@ -193,7 +197,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <body>
 <div class="wrap">
   <header>
-    <img src="/sentimento.png" alt="Sentimento" class="logo-corner">
+    <img src="__LOGO_DATA_URI__" alt="Sentimento" class="logo-corner">
     <h1>Sentimento</h1>
     <p>Paste a ticker or a contract address. We auto-detect the chain and score sentiment across 5 dimensions.</p>
   </header>
@@ -394,3 +398,5 @@ input.addEventListener('keydown', (e) => { if (e.key === 'Enter') analyze(); });
 </body>
 </html>
 """
+
+INDEX_HTML = INDEX_HTML.replace("__LOGO_DATA_URI__", _LOGO_DATA_URI)
