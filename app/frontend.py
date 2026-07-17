@@ -69,11 +69,11 @@ INDEX_HTML = """<!DOCTYPE html>
     color: var(--text);
     line-height: 1;
   }
-  header p { color: var(--muted); margin: 0; font-size: 1.05rem; }
+  header p { color: var(--muted); margin: 0 auto; font-size: 1.05rem; max-width: 620px; }
 
   .search-box {
     display: flex; gap: 12px; margin: 0 auto 12px;
-    max-width: 900px;
+    max-width: 620px;
   }
   .dims-hint {
     text-align: center; color: var(--muted); font-size: 0.82rem; max-width: 640px;
