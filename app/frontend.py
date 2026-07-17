@@ -69,11 +69,11 @@ INDEX_HTML = """<!DOCTYPE html>
     color: var(--text);
     line-height: 1;
   }
-  header p { color: var(--muted); margin: 0 auto; font-size: 1.05rem; max-width: 620px; }
+  header p { color: var(--muted); margin: 0; font-size: 1.05rem; }
 
   .search-box {
     display: flex; gap: 12px; margin: 0 auto 12px;
-    max-width: 620px;
+    max-width: 620px; /* JS sets this to the subtitle's actual rendered width on load */
   }
   .dims-hint {
     text-align: center; color: var(--muted); font-size: 0.82rem; max-width: 640px;
@@ -220,7 +220,7 @@ INDEX_HTML = """<!DOCTYPE html>
   <header>
     <img src="__LOGO_DATA_URI__" alt="Sentimento" class="logo-corner">
     <h1>Sentimento</h1>
-    <p>Paste a ticker or a contract address. We auto-detect the chain and score sentiment across 5 dimensions.</p>
+    <p id="subtitle">Paste a ticker or a contract address. We auto-detect the chain and score sentiment across 5 dimensions.</p>
   </header>
 
   <div class="search-box">
@@ -302,6 +302,19 @@ const btn = document.getElementById('analyze-btn');
 const statusEl = document.getElementById('status');
 const errorBox = document.getElementById('error-box');
 const report = document.getElementById('report');
+
+// Search bar width should always match the subtitle's actual rendered
+// text width, not a guessed pixel value - measure it directly rather
+// than hardcoding a number that drifts out of sync with font/viewport.
+function matchSearchBoxWidth() {
+  const subtitle = document.getElementById('subtitle');
+  const searchBox = document.querySelector('.search-box');
+  if (!subtitle || !searchBox) return;
+  const width = subtitle.getBoundingClientRect().width;
+  if (width > 0) searchBox.style.maxWidth = width + 'px';
+}
+matchSearchBoxWidth();
+window.addEventListener('resize', matchSearchBoxWidth);
 
 const DIM_LABELS = {
   social_buzz: 'Social Buzz',
