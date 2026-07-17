@@ -23,6 +23,9 @@ INDEX_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sentimento</title>
 <link rel="icon" href="__LOGO_DATA_URI__">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800&display=swap" rel="stylesheet">
 <style>
   :root {
     /* OKX brand palette: black, white, signature bright green. No other
@@ -49,14 +52,16 @@ INDEX_HTML = """<!DOCTYPE html>
     min-height: 100vh;
   }
   .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; position: relative; }
-  header { text-align: left; margin-bottom: 28px; position: relative; padding-left: 64px; min-height: 52px; }
+  header { text-align: center; margin-bottom: 28px; position: relative; }
   .logo-corner {
-    position: absolute; top: 0; left: 0;
+    position: fixed; top: 16px; left: 16px;
     width: 52px; height: 52px; border-radius: 14px;
     box-shadow: 0 0 0 1px var(--border);
+    z-index: 10;
   }
   header h1 {
-    font-size: 1.8rem; margin: 0 0 6px; letter-spacing: -0.01em; font-weight: 800;
+    font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 33.8px; margin: 0 0 6px; letter-spacing: -0.01em; font-weight: 800;
     color: var(--text);
   }
   header p { color: var(--muted); margin: 0; font-size: 0.95rem; }
