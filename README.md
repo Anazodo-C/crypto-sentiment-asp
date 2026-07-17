@@ -133,42 +133,43 @@ Other Python hosts (Render, Fly.io, Railway) also work if you'd rather
 run `uvicorn app.main:app` directly instead of the Vercel adapter —
 just ignore `vercel.json`/`api/` in that case.
 
-## x402 payment integration
+## x402 payment integration — attempted, currently blocked, shipping free
 
-`app/x402.py` wraps `POST /sentiment` with OKX's official seller SDK
-(`okxweb3-app-x402`'s `PaymentMiddlewareASGI`), which does real
-verify+settle against OKX's facilitator on X Layer (`eip155:196`,
-`exact` scheme) — not a placeholder check.
+`app/x402.py` was written to wrap `POST /sentiment` with what OKX's docs
+describe as their official seller SDK (`okxweb3-app-x402`'s
+`PaymentMiddlewareASGI`, with `OKXAuthConfig`/`OKXFacilitatorClient` for
+verify+settle against OKX's facilitator on X Layer).
 
-**Not live-tested**: this package requires Python >=3.11, and the sandbox
-this was built in only has Python 3.10, so it could not be pip-installed
-or exercised locally. Vercel's default Python runtime is 3.12, so
-installation there should be fine, but you must verify a real payment
-end-to-end after deploying — don't take this on faith.
+**This does not currently work, and the reason is worth recording.**
+`pip install okxweb3-app-x402` resolves to a PyPI package whose metadata
+lists **Coinbase** as author and `github.com/coinbase/x402` as its
+homepage — i.e. it's the generic, network-agnostic x402 protocol library,
+not an OKX-specific facilitator wrapper. The `OKXAuthConfig` /
+`OKXFacilitatorClient` / `OKXFacilitatorConfig` classes described in
+OKX's own SDK reference docs do not exist in this package
+(`ImportError: cannot import name 'OKXAuthConfig' from 'x402.http'`).
+Either OKX distributes their real facilitator SDK a different way (a
+private index, something unlocked after dev-portal signup, a differently
+-named package), or the docs describe something not yet matched by what's
+publicly installable. This was not resolved before the deadline.
 
-To enable paid mode, set these env vars (see `.env.example`):
-
-1. `OKX_API_KEY` / `OKX_SECRET_KEY` / `OKX_PASSPHRASE` — from the
-   [OKX Developer Portal](https://web3.okx.com/onchain-os/dev-portal)
-   (separate from your Agentic Wallet login).
-2. `X402_RECEIVING_ADDRESS` — your EVM wallet address (run
-   `onchainos wallet status` in an agent session logged into your
-   Agentic Wallet).
-3. `X402_PRICE_USDC` — human-readable price per call (e.g. `"0.5"`).
-4. `X402_ENABLED=true` — only after 1-3 are filled in AND you've tested
-   a real payment. If `X402_ENABLED=true` but any var is missing, the app
-   fails loudly at startup (`RuntimeError`) rather than silently serving
-   requests as if they were paid — check your deploy logs if it won't boot.
-
-**Testing it for real** means: pay the live endpoint from a wallet with
-actual funds on X Layer and confirm the settlement receipt / `PAYMENT-RESPONSE`
-header comes back correctly, and that an unpaid request genuinely gets a
-402. Scoring logic passing a smoke test is not the same as payment working.
-
-If you're short on time, leave `X402_ENABLED=false` and list it as a
-**free A2MCP endpoint** instead — free services are explicitly supported
-per the OKX.AI tutorial, and you can flip this on later without
+**Current behavior**: `x402.build_middleware()` is wrapped in a try/except
+in `app/main.py` specifically so this kind of failure can't take down the
+whole service — if it throws, the app logs it, exposes the real exception
+via `GET /health`'s `x402_error` field (faster to debug than digging
+through Vercel's log tab), and **falls back to serving `/sentiment` for
+free** rather than 500ing every route. Practically: leave
+`X402_ENABLED=false` in your deploy env vars and register the ASP as
+**free** — free A2MCP services are explicitly supported per the OKX.AI
+tutorial, and this can be revisited and flipped on later without
 re-registering from scratch.
+
+**If you pick this back up later**: don't restart from OKX's Python SDK
+reference doc as ground truth — it didn't match the real package. Instead
+start from whatever the OKX Developer Portal actually hands you after
+signup (real package name, real code samples), or from
+`github.com/coinbase/x402`'s own Python folder if a generic (non-OKX
+-specific) facilitator turns out to be sufficient.
 
 ## Registering as an ASP on OKX.AI
 
