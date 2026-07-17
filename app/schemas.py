@@ -99,5 +99,4 @@ class SentimentResponse(BaseModel):
         "Cryptocurrency is highly volatile. Always DYOR."
     )
 
-    markdown_report: str
     warnings: list[str] = []

@@ -89,7 +89,6 @@ def run():
         assert 0 <= body["sentiment_score"] <= 100
         assert body["sub_dimensions"]["social_buzz"]["confidence"] == "low"
         assert any("X/Twitter" in w for w in body["warnings"])
-        assert len(body["markdown_report"]) > 200
 
         # 3. now simulate Twitter being available -> higher confidence path
         with patch("app.main.twitter.get_recent_mentions", new=AsyncMock(

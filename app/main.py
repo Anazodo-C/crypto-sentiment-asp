@@ -199,10 +199,6 @@ async def sentiment(req: SentimentRequest, request: Request):
         f"as directional at best, not precise."
     )
 
-    markdown_report = scoring.build_markdown_report(
-        name, symbol, total, sub_scores, fng, contrarian, verdict, warnings
-    )
-
     return SentimentResponse(
         token_ticker=symbol,
         token_name=name,
@@ -214,6 +210,5 @@ async def sentiment(req: SentimentRequest, request: Request):
         fear_greed=fng,
         contrarian_signals=contrarian,
         verdict=verdict,
-        markdown_report=markdown_report,
         warnings=warnings,
     )

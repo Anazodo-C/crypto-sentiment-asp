@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(onchainos preflight *)"
+      "Bash(onchainos preflight *)",
+      "Bash(onchainos agent *)"
     ]
   }
 }

@@ -23,7 +23,6 @@ available *structured* data source, and is explicit in `basis` and
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
 from app.schemas import ContrarianSignal, FearGreedContext, SubDimensionScore
@@ -244,64 +243,6 @@ def contrarian_signals(total: float, fng: FearGreedContext) -> list[ContrarianSi
             note="Sentiment and market fear/greed are within normal ranges.",
         ))
     return signals
-
-
-def build_markdown_report(token_name: str, ticker: str, total: float, subs: dict, fng: FearGreedContext, contrarian: list[ContrarianSignal], verdict: str, warnings: list[str]) -> str:
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    lines = [
-        f"# {token_name} ({ticker}) — Sentiment Analysis",
-        "",
-        f"**Generated:** {now}",
-        "**Agent:** Crypto Sentiment ASP v1.0 (A2MCP)",
-        f"**Sentiment Score:** {total:.1f}/100",
-        "",
-        "> DISCLAIMER: For educational/research purposes only. Not financial advice. "
-        "Cryptocurrency is highly volatile. Always DYOR.",
-        "",
-        "---", "",
-        f"## Sentiment Score: {total:.1f}/100", "",
-        "| Sub-Dimension | Score | Confidence | Assessment |",
-        "|---|---|---|---|",
-    ]
-    names = {
-        "social_buzz": "Social Buzz", "news_tone": "News Tone",
-        "community_health": "Community Health", "developer_activity": "Developer Activity",
-        "narrative_momentum": "Narrative Momentum",
-    }
-    for key, label in names.items():
-        s = subs[key]
-        lines.append(f"| {label} | {s.score}/20 | {s.confidence} | {s.assessment} |")
-
-    lines += ["", "---", "", "## Market Fear & Greed Context", ""]
-    if fng.available and fng.value is not None:
-        lines.append(f"Fear & Greed Index: **{fng.value}/100** ({fng.label}), 7d trend: {fng.trend_7d}")
-    else:
-        lines.append("Fear & Greed Index unavailable at request time.")
-
-    lines += ["", "---", "", "## Sub-Dimension Basis", ""]
-    for key, label in names.items():
-        s = subs[key]
-        lines.append(f"- **{label}**: {s.basis} (sources: {', '.join(s.data_sources)})")
-
-    lines += ["", "---", "", "## Contrarian Signals", ""]
-    for c in contrarian:
-        lines.append(f"- **{c.signal}** — {c.condition}. {c.note}")
-
-    lines += ["", "---", "", "## Sentiment Verdict", "", verdict]
-
-    if warnings:
-        lines += ["", "---", "", "## Data Warnings", ""]
-        for w in warnings:
-            lines.append(f"- {w}")
-
-    lines += [
-        "", "---", "",
-        "*DISCLAIMER: For educational/research purposes only. Not financial advice. "
-        "Cryptocurrency is highly volatile. Always DYOR. Several sub-dimensions above "
-        "are structured-data proxies rather than live social/news scraping - see basis "
-        "notes and confidence levels for what's directly measured vs. approximated.*",
-    ]
-    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
