@@ -72,22 +72,28 @@ INDEX_HTML = """<!DOCTYPE html>
   header p { color: var(--muted); margin: 0; font-size: 1.05rem; }
 
   .search-box {
-    display: flex; gap: 10px; margin: 0 auto 12px;
-    max-width: 640px;
+    display: flex; gap: 12px; margin: 0 auto 12px;
+    max-width: 680px;
   }
   .dims-hint {
     text-align: center; color: var(--muted); font-size: 0.82rem; max-width: 640px;
     margin: 0 auto 32px; line-height: 1.6;
   }
   .dims-hint b { color: var(--text); font-weight: 600; }
+  .dims-intro { text-align: center; margin: 0 0 12px; }
+  .dims-list {
+    list-style: none; margin: 0; padding: 0; text-align: left;
+    display: inline-block;
+  }
+  .dims-list li { margin-bottom: 6px; }
   input#token-input {
     flex: 1;
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 14px 16px;
-    border-radius: 10px;
-    font-size: 1rem;
+    padding: 20px 24px;
+    border-radius: 12px;
+    font-size: 1.2rem;
     outline: none;
   }
   input#token-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0, 217, 117, 0.15); }
@@ -95,10 +101,10 @@ INDEX_HTML = """<!DOCTYPE html>
     background: var(--accent);
     color: #000000;
     border: none;
-    padding: 14px 22px;
-    border-radius: 10px;
+    padding: 20px 32px;
+    border-radius: 12px;
     font-weight: 700;
-    font-size: 1rem;
+    font-size: 1.2rem;
     cursor: pointer;
     transition: transform 0.12s ease, opacity 0.12s ease;
   }
@@ -222,10 +228,14 @@ INDEX_HTML = """<!DOCTYPE html>
     <button id="analyze-btn">Analyze</button>
   </div>
   <div class="dims-hint">
-    Every score is built from <b>5 dimensions</b>: <b>Social Buzz</b> (live X mention volume &amp; engagement),
-    <b>News Tone</b> (bullish/bearish tone across live posts), <b>Community Health</b> (Reddit/Telegram/X community size &amp; activity),
-    <b>Liquidity Health</b> (trading volume relative to market depth), and <b>Narrative Momentum</b> (category fit &amp; price trend) &mdash;
-    each scored 0-20 and shown with its own confidence level.
+    <p class="dims-intro">Every score is built from <b>5 dimensions</b>:</p>
+    <ul class="dims-list">
+      <li><b>Social Buzz</b> &mdash; live X mention volume &amp; engagement</li>
+      <li><b>News Tone</b> &mdash; bullish/bearish tone across live posts</li>
+      <li><b>Community Health</b> &mdash; Reddit/Telegram/X community size &amp; activity</li>
+      <li><b>Liquidity Health</b> &mdash; trading volume relative to market depth</li>
+      <li><b>Narrative Momentum</b> &mdash; category fit &amp; price trend</li>
+    </ul>
   </div>
 
   <div id="status"></div>
