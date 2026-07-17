@@ -62,6 +62,17 @@ This ships honest about its data sources rather than overclaiming:
 | News Tone | Keyword bullish/bearish tone tally over live tweet text we already fetch for Social Buzz, if available; else CoinGecko `public_interest_score` + sentiment votes + price momentum | **Proxy** either way (no live headline/news API wired up) |
 | Narrative Momentum | CoinGecko category + market cap rank + 30d price momentum (established); 24h price change + pool volume via GeckoTerminal (new tokens) | **Proxy** (no live narrative/news source) |
 
+**No fabricated numbers, ever.** If a dimension has no real data behind
+it at all, its `score` field is `null` and `confidence` is
+`"unavailable"` — never a guessed placeholder value standing in for a
+real measurement. `sentiment_score` is computed only from the
+dimensions that actually had real data (see `dimensions_scored` in the
+response, and the `warnings` array when fewer than 5/5 were available),
+so a token missing one data source is never silently scored as if that
+dimension were a middling/neutral result. See
+`test_no_fabricated_data_when_sparse()` in `test_smoke.py` for the
+regression test covering this.
+
 **Why Liquidity Health replaced Developer Activity:** GitHub commit
 activity is a weak-to-irrelevant sentiment signal for most of today's
 tokens — anonymous devs, no public repo, pure memecoins — and it was

@@ -1,6 +1,21 @@
 """Scoring engine implementing the crypto_sentiment.md 5x20 methodology
 against real, programmatically-available data sources.
 
+HARD RULE - never fabricate a score: if a dimension has no real data
+behind it, the function returns score=None (SubDimensionScore.score is
+Optional) and confidence="unavailable" - never a guessed placeholder
+number standing in for a real measurement. This engine used to violate
+that rule in several places: a flat 8.0 for "insufficient data", a
+hardcoded "4" filled in for a missing sentiment component, `.get(field)
+or 0` coalescing a merely-missing API field into a confirmed real zero,
+etc. All of those produced a plausible-looking number that was not
+actually derived from any real data point - unacceptable for a tool
+whose output can inform real portfolio/trading decisions. Every function
+below sums only the real, present components it actually has; a missing
+input contributes nothing and is never assumed/guessed. See
+app/schemas.py's SubDimensionScore docstring and test_smoke.py's
+test_no_fabricated_data_when_sparse() for the regression coverage.
+
 Honesty note (per hackathon template Stage 4 guidance - don't overclaim):
 the original crypto_sentiment.md framework assumes a human/LLM agent doing
 live WebSearch across CT, Reddit, Discord, Telegram, GitHub, and news for
@@ -82,43 +97,60 @@ def detect_category(categories: list[str], hint: Optional[str]) -> str:
 def score_social_buzz(coin: dict, twitter: Optional[dict]) -> SubDimensionScore:
     sentiment_up = coin.get("sentiment_votes_up_percentage")
     community = coin.get("community_data", {}) or {}
-    twitter_followers = community.get("twitter_followers") or 0
-    reddit_subs = community.get("reddit_subscribers") or 0
-
+    twitter_followers = community.get("twitter_followers")
     sources = ["coingecko"]
-    confidence = "medium"
 
     if twitter and twitter.get("available"):
         mentions = twitter.get("mention_count", 0)
         engagement = twitter.get("total_engagement", 0)
         # crude volume+engagement heuristic, scaled to 0-20
-        raw = min(20, (mentions / 10) + (engagement / 500))
+        score = _clip(min(20, (mentions / 10) + (engagement / 500)))
         basis = f"{mentions} mentions / 24h, {engagement} total likes+RTs (live X API)"
         sources.append("twitter")
         confidence = "high"
-        score = _clip(raw)
-    else:
-        # Proxy: follower count (log-scaled) + sentiment vote skew
-        import math
-
-        follower_component = min(12, math.log10(max(twitter_followers, 1)) * 2.2)
-        sentiment_component = (sentiment_up / 100 * 8) if sentiment_up is not None else 4
-        score = _clip(follower_component + sentiment_component)
-        reason = twitter.get("reason") if twitter else "no TWITTER_BEARER_TOKEN configured"
-        basis = (
-            f"proxy from {twitter_followers:,} X followers + "
-            f"{sentiment_up if sentiment_up is not None else 'n/a'}% positive sentiment votes "
-            f"(live X search unavailable: {reason})"
+        return SubDimensionScore(
+            score=round(score, 1), assessment=_social_buzz_label(score),
+            confidence=confidence, basis=basis, data_sources=sources,
         )
-        confidence = "low"
 
-    label = (
+    # No live Twitter data. Build the score only from real CoinGecko
+    # fields that are actually present - never substitute a guessed
+    # number for a component we don't have real data for.
+    import math
+
+    reason = twitter.get("reason") if twitter else "no TWITTER_BEARER_TOKEN configured"
+    used = []
+    components = 0.0
+
+    if twitter_followers is not None:
+        components += min(12, math.log10(max(twitter_followers, 1)) * 2.2)
+        used.append(f"{twitter_followers:,} X followers")
+    if sentiment_up is not None:
+        components += sentiment_up / 100 * 8
+        used.append(f"{sentiment_up}% positive sentiment votes")
+
+    if not used:
+        return SubDimensionScore(
+            score=None, assessment="Insufficient Data", confidence="unavailable",
+            basis=(
+                "no X follower count or sentiment vote data available from CoinGecko, "
+                f"and live X search is unavailable ({reason})"
+            ),
+            data_sources=[],
+        )
+
+    score = _clip(components)
+    basis = f"proxy from {' + '.join(used)} (live X search unavailable: {reason})"
+    return SubDimensionScore(
+        score=round(score, 1), assessment=_social_buzz_label(score), confidence="low",
+        basis=basis, data_sources=sources,
+    )
+
+
+def _social_buzz_label(score: float) -> str:
+    return (
         "Viral" if score >= 17 else "High" if score >= 13 else "Moderate" if score >= 9
         else "Low" if score >= 5 else "Dead"
-    )
-    return SubDimensionScore(
-        score=round(score, 1), assessment=label, confidence=confidence, basis=basis,
-        data_sources=sources,
     )
 
 
@@ -172,26 +204,40 @@ def score_news_tone_from_tweets(texts: list[str]) -> SubDimensionScore:
 
 
 def score_news_tone(coin: dict) -> SubDimensionScore:
-    public_interest = coin.get("public_interest_score") or 0
+    public_interest = coin.get("public_interest_score")
     sentiment_up = coin.get("sentiment_votes_up_percentage")
     price_change_30d = (coin.get("market_data", {}) or {}).get(
         "price_change_percentage_30d_in_currency", {}
     ).get("usd")
 
-    interest_component = min(10, public_interest * 100)  # public_interest_score is tiny (0-1ish)
-    sentiment_component = (sentiment_up / 100 * 6) if sentiment_up is not None else 3
-    momentum_component = 4
+    # Only sum components we actually have real data for - a missing
+    # field contributes nothing rather than a guessed "neutral" value.
+    used = []
+    components = 0.0
+    if public_interest is not None:
+        components += min(10, public_interest * 100)  # public_interest_score is tiny (0-1ish)
+        used.append(f"public_interest_score={public_interest}")
+    if sentiment_up is not None:
+        components += sentiment_up / 100 * 6
+        used.append(f"sentiment_up={sentiment_up}%")
     if price_change_30d is not None:
-        momentum_component = _clip(4 + price_change_30d / 20, 0, 4)  # +/-20% -> +/-1
+        components += _clip(4 + price_change_30d / 20, 0, 4)  # +/-20% -> +/-1
+        used.append(f"30d price change={price_change_30d}%")
 
-    score = _clip(interest_component + sentiment_component + momentum_component)
+    if not used:
+        return SubDimensionScore(
+            score=None, assessment="Insufficient Data", confidence="unavailable",
+            basis="no public_interest_score, sentiment votes, or price data available from CoinGecko",
+            data_sources=[],
+        )
+
+    score = _clip(components)
     label = (
         "Very Positive" if score >= 17 else "Positive" if score >= 13 else "Neutral"
         if score >= 9 else "Negative" if score >= 5 else "Very Negative"
     )
     basis = (
-        f"proxy from CoinGecko public_interest_score={public_interest}, "
-        f"sentiment_up={sentiment_up}%, 30d price change={price_change_30d}% "
+        f"proxy from CoinGecko {', '.join(used)} "
         f"(no live headline/news API wired up)"
     )
     return SubDimensionScore(
@@ -201,11 +247,15 @@ def score_news_tone(coin: dict) -> SubDimensionScore:
 
 
 def score_community_health(coin: dict) -> SubDimensionScore:
-    community_score = coin.get("community_score") or 0
+    community_score = coin.get("community_score")
     community = coin.get("community_data", {}) or {}
-    reddit_subs = community.get("reddit_subscribers") or 0
-    telegram = community.get("telegram_channel_user_count") or 0
-    twitter_followers = community.get("twitter_followers") or 0
+    # Read with .get(field) (no `or 0` coalescing) so a field CoinGecko
+    # didn't return (None/missing) is never conflated with a confirmed
+    # real zero - those are different facts, and treating "unknown" as
+    # "zero" would silently compute a score from an assumed value.
+    reddit_subs = community.get("reddit_subscribers")
+    telegram = community.get("telegram_channel_user_count")
+    twitter_followers = community.get("twitter_followers")
 
     if community_score:
         # CoinGecko's own derived score is populated - trust it directly.
@@ -213,35 +263,53 @@ def score_community_health(coin: dict) -> SubDimensionScore:
         confidence = "high"
         basis = (
             f"CoinGecko community_score={community_score}, "
-            f"reddit_subscribers={reddit_subs}, telegram_users={telegram}"
+            f"reddit_subscribers={reddit_subs if reddit_subs is not None else 'n/a'}, "
+            f"telegram_users={telegram if telegram is not None else 'n/a'}"
         )
-    else:
-        # community_score is frequently null across CoinGecko's API today,
-        # even for well-known coins. Falling back to a flat default here
-        # (the old behavior) produced identical scores across unrelated
-        # tokens. Instead, log-scale the raw counts directly - these
-        # remain populated far more often and actually vary per token.
-        import math
-
-        raw = (
-            math.log10(max(reddit_subs, 1)) * 3.2
-            + math.log10(max(telegram, 1)) * 2.2
-            + math.log10(max(twitter_followers, 1)) * 1.6
-        )
-        score = _clip(raw)
-        confidence = "medium" if (reddit_subs or telegram or twitter_followers) else "low"
-        basis = (
-            f"community_score unavailable; proxy from reddit_subscribers={reddit_subs}, "
-            f"telegram_users={telegram}, twitter_followers={twitter_followers} (log-scaled)"
+        return SubDimensionScore(
+            score=round(score, 1), assessment=_community_label(score),
+            confidence=confidence, basis=basis, data_sources=["coingecko"],
         )
 
-    label = (
+    # community_score is frequently null across CoinGecko's API today,
+    # even for well-known coins. Falling back to a flat default here (the
+    # old behavior) produced identical scores across unrelated tokens.
+    # Instead, log-scale whichever raw counts are actually present - only
+    # real, present fields contribute; a missing one is omitted entirely
+    # rather than treated as 0.
+    import math
+
+    used = []
+    raw = 0.0
+    if reddit_subs is not None:
+        raw += math.log10(max(reddit_subs, 1)) * 3.2
+        used.append(f"reddit_subscribers={reddit_subs}")
+    if telegram is not None:
+        raw += math.log10(max(telegram, 1)) * 2.2
+        used.append(f"telegram_users={telegram}")
+    if twitter_followers is not None:
+        raw += math.log10(max(twitter_followers, 1)) * 1.6
+        used.append(f"twitter_followers={twitter_followers}")
+
+    if not used:
+        return SubDimensionScore(
+            score=None, assessment="Insufficient Data", confidence="unavailable",
+            basis="no community_score or community_data (Reddit/Telegram/X) available from CoinGecko",
+            data_sources=[],
+        )
+
+    score = _clip(raw)
+    basis = f"community_score unavailable; proxy from {', '.join(used)} (log-scaled)"
+    return SubDimensionScore(
+        score=round(score, 1), assessment=_community_label(score), confidence="medium",
+        basis=basis, data_sources=["coingecko"],
+    )
+
+
+def _community_label(score: float) -> str:
+    return (
         "Thriving" if score >= 17 else "Healthy" if score >= 13 else "Moderate"
         if score >= 9 else "Declining" if score >= 5 else "Dead"
-    )
-    return SubDimensionScore(
-        score=round(score, 1), assessment=label, confidence=confidence, basis=basis,
-        data_sources=["coingecko"],
     )
 
 
@@ -272,9 +340,11 @@ def score_liquidity_health(coin: dict) -> SubDimensionScore:
             f"(${volume:,.0f} volume / ${mcap:,.0f} mcap)"
         )
     else:
-        score = 8.0
-        confidence = "low"
-        basis = "no liquidity_score or volume/market cap data available"
+        return SubDimensionScore(
+            score=None, assessment="Insufficient Data", confidence="unavailable",
+            basis="no liquidity_score or volume/market cap data available from CoinGecko",
+            data_sources=[],
+        )
 
     label = (
         "Deep" if score >= 17 else "Healthy" if score >= 13 else "Adequate"
@@ -291,27 +361,42 @@ def score_narrative_momentum(coin: dict, category: str) -> SubDimensionScore:
     rank = coin.get("market_cap_rank")
     price_change_30d = market_data.get("price_change_percentage_30d_in_currency", {}).get("usd")
 
+    # category is always real (detected from the coin's actual CoinGecko
+    # categories, or an explicit user-provided hint), so fit_component is
+    # never a guess. price_change_30d and rank each contribute only when
+    # actually present - a missing one is omitted, not defaulted to a
+    # "neutral" guessed value.
     hot_categories = {"ai-depin", "layer2", "defi"}  # simplifying assumption, documented
     fit_component = 12 if category in hot_categories else 8
-    momentum_component = 4
+    used = [f"category={category}"]
+
+    momentum_component = 0.0
     if price_change_30d is not None:
         momentum_component = _clip(4 + price_change_30d / 15, 0, 8)
+        used.append(f"30d price change={price_change_30d}%")
+    else:
+        used.append("30d price change=n/a")
+
     rank_component = 0
     if rank is not None:
         rank_component = 4 if rank <= 50 else 2 if rank <= 200 else 0
+        used.append(f"market_cap_rank={rank}")
+    else:
+        used.append("market_cap_rank=n/a")
 
-    score = _clip(fit_component * (20 / 20) * 0.4 + momentum_component + rank_component)
+    score = _clip(fit_component * 0.4 + momentum_component + rank_component)
     label = (
         "Peak Narrative" if score >= 17 else "Strong Alignment" if score >= 13
         else "Moderate Alignment" if score >= 9 else "Weak Alignment" if score >= 5
         else "Counter-Narrative"
     )
-    basis = (
-        f"proxy from category={category}, market_cap_rank={rank}, "
-        f"30d price change={price_change_30d}% (no live narrative/news source)"
-    )
+    # "unavailable" is reserved for score=None - this always returns a
+    # real (if weak) score since category is genuine data, so the worst
+    # case here is "low" confidence, not "unavailable".
+    confidence = "low"
+    basis = f"proxy from {', '.join(used)} (no live narrative/news source)"
     return SubDimensionScore(
-        score=round(score, 1), assessment=label, confidence="low", basis=basis,
+        score=round(score, 1), assessment=label, confidence=confidence, basis=basis,
         data_sources=["coingecko"],
     )
 
@@ -368,17 +453,15 @@ def contrarian_signals(total: float, fng: FearGreedContext) -> list[ContrarianSi
 # ---------------------------------------------------------------------------
 
 def insufficient_data_score(dimension: str, reason: str) -> SubDimensionScore:
-    """A flat, honest mid-low score for a dimension with no real signal for
-    this token - e.g. no GitHub repo exists for most brand-new DEX tokens.
-    Deliberately not 0 (that implies confirmed bad activity) and not ~10
-    (that implies genuine neutrality) - it's explicitly "unknown", which the
-    low confidence + basis text make clear rather than letting a numeric
-    default masquerade as a measurement.
+    """No real signal exists for this dimension - e.g. no GitHub repo for
+    most brand-new DEX tokens, or no pool data yet. Returns score=None
+    (not a guessed number) so nothing here can be mistaken for an actual
+    measurement; `confidence="unavailable"` and `basis` say exactly why.
     """
     return SubDimensionScore(
-        score=8.0,
+        score=None,
         assessment="Insufficient Data",
-        confidence="low",
+        confidence="unavailable",
         basis=reason,
         data_sources=[],
     )
@@ -443,12 +526,16 @@ def score_narrative_momentum_dex(gt_token: dict, gt_pools: list[dict], category:
     price_change_h24 = (top_pool.get("price_change_percentage") or {}).get("h24")
     volume_h24 = (top_pool.get("volume_usd") or {}).get("h24")
 
-    momentum_component = 8.0
+    # Only add a momentum contribution when we actually have a real 24h
+    # price change - previously this defaulted to 8.0 ("neutral") when
+    # missing, which is a guessed number standing in for real data.
+    momentum_component = None
     if price_change_h24 is not None:
         try:
             momentum_component = _clip(8 + float(price_change_h24) / 10, 0, 16)
         except (TypeError, ValueError):
-            pass
+            momentum_component = None
+
     volume_component = 0.0
     if volume_h24:
         try:
@@ -457,18 +544,26 @@ def score_narrative_momentum_dex(gt_token: dict, gt_pools: list[dict], category:
         except (TypeError, ValueError):
             pass
 
-    score = _clip(momentum_component + volume_component)
+    if momentum_component is None and not volume_h24:
+        return insufficient_data_score(
+            "Narrative Momentum",
+            "no real 24h price change or volume data available from GeckoTerminal's top pool",
+        )
+
+    score = _clip((momentum_component or 0.0) + volume_component)
     label = (
         "Peak Narrative" if score >= 17 else "Strong Alignment" if score >= 13
         else "Moderate Alignment" if score >= 9 else "Weak Alignment" if score >= 5
         else "Counter-Narrative"
     )
+    confidence = "low" if momentum_component is not None else "unavailable"
     basis = (
-        f"proxy from 24h price change={price_change_h24}%, 24h pool volume=${volume_h24} "
+        f"proxy from 24h price change={price_change_h24 if price_change_h24 is not None else 'n/a'}%, "
+        f"24h pool volume=${volume_h24 if volume_h24 else 'n/a'} "
         f"(GeckoTerminal top pool), category={category}"
     )
     return SubDimensionScore(
-        score=round(score, 1), assessment=label, confidence="low", basis=basis,
+        score=round(score, 1), assessment=label, confidence=confidence, basis=basis,
         data_sources=["geckoterminal"],
     )
 

@@ -77,6 +77,27 @@ FIXTURE_COIN = {
     },
 }
 
+# A coin with almost nothing populated - simulates CoinGecko returning a
+# real but sparse record (common in practice: many of the *_score /
+# community_data / market_data fields are null for large numbers of
+# coins). This is the regression fixture for the "never fabricate data"
+# requirement: every affected dimension below must come back as
+# score=None / confidence="unavailable", never a plausible-looking
+# invented number.
+SPARSE_COIN = {
+    "id": "obscure-coin",
+    "symbol": "obs",
+    "name": "Obscure Coin",
+    "categories": ["Layer 1 (L1)"],
+    "community_score": None,
+    "liquidity_score": None,
+    "public_interest_score": None,
+    "sentiment_votes_up_percentage": None,
+    "market_cap_rank": None,
+    "community_data": {},
+    "market_data": {},
+}
+
 FIXTURE_FNG = {"value": 62, "label": "Greed", "trend_7d": "rising"}
 
 FIXTURE_GT_TOKEN = {
@@ -182,8 +203,11 @@ def run():
         assert body5["token_name"] == "Brand New Coin"
         assert body5["token_ticker"] == "BNC"
         assert body5["sub_dimensions"]["news_tone"]["assessment"] == "Insufficient Data"
-        assert body5["sub_dimensions"]["community_health"]["confidence"] == "low"
+        assert body5["sub_dimensions"]["news_tone"]["score"] is None  # no fabricated number
+        assert body5["sub_dimensions"]["community_health"]["confidence"] == "unavailable"
+        assert body5["sub_dimensions"]["community_health"]["score"] is None
         assert body5["sub_dimensions"]["social_buzz"]["score"] > 0  # on-chain tx proxy kicked in
+        assert body5["dimensions_scored"] < 5  # news_tone + community_health are unavailable
         # liquidity_health: fixture's gt_token has no total_reserve_in_usd/fdv_usd,
         # but the pool fixture does have 24h volume, so it should score off that
         # rather than falling back to Insufficient Data.
@@ -220,7 +244,65 @@ def run():
         print()
         test_detect_network_against_real_response()
 
-        print("\nALL SMOKE TESTS PASSED")
+    test_no_fabricated_data_when_sparse()
+
+    print("\nALL SMOKE TESTS PASSED")
+
+
+def test_no_fabricated_data_when_sparse():
+    """Regression test for the 'never fabricate data' requirement. A prior
+    version of the scoring engine substituted invented placeholder numbers
+    (a flat 8.0, a hardcoded '4' for a missing sentiment component, etc.)
+    when real data was unavailable. This proves that no longer happens:
+    every dimension backed by missing data must come back as score=None /
+    confidence="unavailable", never a plausible-looking number."""
+    with patch("app.main.coingecko.resolve_coin_id", new=AsyncMock(
+        return_value={"id": "obscure-coin", "symbol": "OBS", "name": "Obscure Coin"}
+    )), patch("app.main.coingecko.get_coin_data", new=AsyncMock(
+        return_value=SPARSE_COIN
+    )), patch("app.main.feargreed.get_fear_greed", new=AsyncMock(
+        return_value=FIXTURE_FNG
+    )), patch("app.main.twitter.get_recent_mentions", new=AsyncMock(
+        return_value={"available": False, "reason": "no bearer token configured"}
+    )):
+        from app.main import app
+        client = TestClient(app)
+
+        print("\n--- sparse-data regression: no fabricated numbers ---")
+        r = client.post("/sentiment", json={"token": "OBS"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for k, v in body["sub_dimensions"].items():
+            print(f"  {k}: {v['score']} conf={v['confidence']} - {v['basis']}")
+
+        # Social Buzz: no twitter, no follower count, no sentiment votes -> None
+        assert body["sub_dimensions"]["social_buzz"]["score"] is None
+        assert body["sub_dimensions"]["social_buzz"]["confidence"] == "unavailable"
+
+        # News Tone: no public_interest, no sentiment votes, no price data -> None
+        assert body["sub_dimensions"]["news_tone"]["score"] is None
+        assert body["sub_dimensions"]["news_tone"]["confidence"] == "unavailable"
+
+        # Liquidity Health: no liquidity_score, no volume/mcap -> None
+        assert body["sub_dimensions"]["liquidity_health"]["score"] is None
+        assert body["sub_dimensions"]["liquidity_health"]["confidence"] == "unavailable"
+
+        # Community Health: no community_score AND no community_data
+        # counts present at all -> None (not a fabricated 0 from
+        # coalescing missing fields to zero).
+        assert body["sub_dimensions"]["community_health"]["score"] is None
+        assert body["sub_dimensions"]["community_health"]["confidence"] == "unavailable"
+
+        # dimensions_scored must honestly reflect that most dimensions
+        # couldn't be measured, not silently claim a full composite.
+        # Only narrative_momentum survives, since category classification
+        # is real data even when nothing else is.
+        assert body["dimensions_scored"] == 1
+        assert any("had real data available" in w for w in body["warnings"])
+
+        print("dimensions_scored:", body["dimensions_scored"])
+        print("sentiment_score:", body["sentiment_score"])
+        print("no fabricated data confirmed")
 
 
 if __name__ == "__main__":

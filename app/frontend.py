@@ -187,6 +187,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .conf-high { background: #113325; color: var(--good); }
   .conf-medium { background: #2e2610; color: var(--warn); }
   .conf-low { background: #2a1c14; color: #d89a5c; }
+  .conf-unavailable { background: #241414; color: var(--bad); }
   .dim-basis {
     font-size: 0.78rem; color: var(--muted); line-height: 1.4;
     overflow-wrap: break-word; word-break: break-word;
@@ -387,16 +388,24 @@ function render(data) {
   pill.style.background = color + '22';
   pill.style.color = color;
 
-  const strongDim = data.sub_dimensions[data.strongest_signal];
-  const weakDim = data.sub_dimensions[data.weakest_signal];
-  const strongLabel = DIM_LABELS[data.strongest_signal] || data.strongest_signal;
-  const weakLabel = DIM_LABELS[data.weakest_signal] || data.weakest_signal;
-  document.getElementById('r-signals').innerHTML =
-    `Strongest signal: <b style="color:var(--good)">${strongLabel}</b>` +
-    (strongDim ? ` (${strongDim.score}/20)` : '') +
-    ` &nbsp;&middot;&nbsp; Weakest signal: ` +
-    `<b style="color:${weakDim ? assessmentColor(weakDim.assessment) : 'var(--warn)'}">${weakLabel}</b>` +
-    (weakDim ? ` (${weakDim.score}/20)` : '');
+  const signalsEl = document.getElementById('r-signals');
+  if (data.strongest_signal && data.weakest_signal) {
+    const strongDim = data.sub_dimensions[data.strongest_signal];
+    const weakDim = data.sub_dimensions[data.weakest_signal];
+    const strongLabel = DIM_LABELS[data.strongest_signal] || data.strongest_signal;
+    const weakLabel = DIM_LABELS[data.weakest_signal] || data.weakest_signal;
+    signalsEl.innerHTML =
+      `Strongest signal: <b style="color:var(--good)">${strongLabel}</b>` +
+      (strongDim ? ` (${strongDim.score}/20)` : '') +
+      ` &nbsp;&middot;&nbsp; Weakest signal: ` +
+      `<b style="color:${weakDim ? assessmentColor(weakDim.assessment) : 'var(--warn)'}">${weakLabel}</b>` +
+      (weakDim ? ` (${weakDim.score}/20)` : '');
+  } else {
+    signalsEl.innerHTML = '<b style="color:var(--bad)">No real data was available for any dimension - this score is not meaningful.</b>';
+  }
+  if (typeof data.dimensions_scored === 'number' && data.dimensions_scored < 5) {
+    signalsEl.innerHTML += ` <span style="color:var(--muted)">(${data.dimensions_scored}/5 dimensions had real data)</span>`;
+  }
 
   document.getElementById('r-verdict').textContent = data.verdict;
   document.getElementById('r-disclaimer').textContent = '⚠ ' + data.disclaimer;
@@ -408,9 +417,12 @@ function render(data) {
     if (!d) continue;
     const card = document.createElement('div');
     card.className = 'dim-card';
+    const scoreDisplay = (d.score === null || d.score === undefined)
+      ? '<span style="color:var(--muted)">N/A</span>'
+      : `${d.score}<span>/${d.max_score}</span>`;
     card.innerHTML = `
       <div class="dim-label">${DIM_LABELS[key]}</div>
-      <div class="dim-score">${d.score}<span>/${d.max_score}</span></div>
+      <div class="dim-score">${scoreDisplay}</div>
       <div class="dim-assessment" style="color:${assessmentColor(d.assessment)}">${d.assessment}</div>
       <div class="conf-badge conf-${d.confidence}">${d.confidence} confidence</div>
       <div class="dim-basis">${d.basis}</div>

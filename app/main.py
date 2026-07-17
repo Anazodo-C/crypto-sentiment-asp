@@ -306,20 +306,50 @@ async def sentiment(req: SentimentRequest, request: Request):
         else:
             name, symbol, category, sub_scores = await _lookup_established_coin(req, client, warnings)
 
-    total = sum(s.score for s in sub_scores.values())
-    assessment = scoring.composite_assessment(total)
-    contrarian = scoring.contrarian_signals(total, fng)
+    # Composite score is computed ONLY from dimensions that returned a
+    # real, non-None score. A dimension with no real data (score=None,
+    # confidence="unavailable") contributes nothing - it is never treated
+    # as 0 (which would imply "confirmed bad") or silently dropped without
+    # comment. sentiment_score is the percentage of the achievable total
+    # among only the scored dimensions, so a token with 4/5 real
+    # dimensions is compared on the same 0-100 scale as one with 5/5,
+    # rather than being unfairly dragged down by a dimension nobody could
+    # actually measure.
+    scored = {k: v for k, v in sub_scores.items() if v.score is not None}
+    dimensions_scored = len(scored)
 
-    strongest_signal = max(sub_scores.items(), key=lambda kv: kv[1].score)[0]
-    weakest_signal = min(sub_scores.items(), key=lambda kv: kv[1].score)[0]
+    if dimensions_scored == 0:
+        total_pct = 0.0
+        strongest_signal = None
+        weakest_signal = None
+        warnings.append(
+            "No real data was available for ANY sub-dimension - this score is not "
+            "meaningful and should not be used for any decision."
+        )
+    else:
+        total_raw = sum(v.score for v in scored.values())
+        total_pct = total_raw / (dimensions_scored * 20) * 100
+        strongest_signal = max(scored.items(), key=lambda kv: kv[1].score)[0]
+        weakest_signal = min(scored.items(), key=lambda kv: kv[1].score)[0]
+        if dimensions_scored < len(sub_scores):
+            missing = [k.replace("_", " ") for k in sub_scores if k not in scored]
+            warnings.append(
+                f"Only {dimensions_scored}/{len(sub_scores)} dimensions had real data "
+                f"available ({', '.join(missing)} unavailable) - sentiment_score reflects "
+                "only what could actually be measured, not a full 5-dimension composite."
+            )
+
+    assessment = scoring.composite_assessment(total_pct)
+    contrarian = scoring.contrarian_signals(total_pct, fng)
 
     # Name/score/assessment are already shown in the verdict card header -
     # restating them here just duplicated the same three facts twice on
     # screen. This is now just the caveat; strongest/weakest signal are
     # structured fields the frontend highlights directly instead.
     verdict = (
-        "Treat proxy-based and Insufficient Data sub-dimensions (see confidence field) "
-        "as directional at best, not precise."
+        "Treat proxy-based sub-dimensions (see confidence field) as directional at "
+        "best, not precise. Dimensions marked Insufficient Data were excluded from "
+        "this score entirely rather than estimated."
     )
 
     return SentimentResponse(
@@ -327,13 +357,14 @@ async def sentiment(req: SentimentRequest, request: Request):
         token_name=name,
         category=category,
         generated_at=datetime.now(timezone.utc).isoformat(),
-        sentiment_score=round(total, 1),
+        sentiment_score=round(total_pct, 1),
         assessment=assessment,
         sub_dimensions=sub_scores,
         fear_greed=fng,
         contrarian_signals=contrarian,
         strongest_signal=strongest_signal,
         weakest_signal=weakest_signal,
+        dimensions_scored=dimensions_scored,
         verdict=verdict,
         warnings=warnings,
     )

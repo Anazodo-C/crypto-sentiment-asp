@@ -16,10 +16,18 @@ Assessment = Literal[
 
 
 class SubDimensionScore(BaseModel):
-    score: float = Field(..., ge=0, le=20)
+    # `score` is nullable on purpose: when no real data source has any
+    # signal for this dimension, we return None rather than a guessed
+    # placeholder number. A previous version of this engine substituted
+    # invented mid-scale values (e.g. a flat 8.0, or a hardcoded "4" for a
+    # missing sentiment component) when real data was unavailable - that
+    # is fabricated data and is never acceptable for a tool informing real
+    # trading/portfolio decisions. If `score` is None, `confidence` will
+    # be "unavailable" and `basis` explains exactly what's missing.
+    score: Optional[float] = Field(default=None, ge=0, le=20)
     max_score: int = 20
     assessment: str
-    confidence: Literal["high", "medium", "low"] = "medium"
+    confidence: Literal["high", "medium", "low", "unavailable"] = "medium"
     basis: str  # one-line explanation of what data drove this score
     data_sources: list[str]
 
@@ -95,10 +103,18 @@ class SentimentResponse(BaseModel):
     contrarian_signals: list[ContrarianSignal]
 
     # Dimension keys (e.g. "narrative_momentum") for the highest/lowest
-    # scoring sub-dimension - lets the frontend highlight them directly
-    # instead of restating name/score/assessment a second time in prose.
-    strongest_signal: str
-    weakest_signal: str
+    # scoring sub-dimension among those with a real score - lets the
+    # frontend highlight them directly instead of restating
+    # name/score/assessment a second time in prose. None in the (rare)
+    # case where every dimension came back with no real data at all.
+    strongest_signal: Optional[str] = None
+    weakest_signal: Optional[str] = None
+
+    # How many of the 5 dimensions had real data to score, out of 5.
+    # sentiment_score is computed only from the available ones (see
+    # app/main.py) - this field is what makes that transparent rather
+    # than silently presenting a partial score as if it were complete.
+    dimensions_scored: int = 5
 
     verdict: str
     disclaimer: str = (
