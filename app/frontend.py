@@ -50,26 +50,36 @@ INDEX_HTML = """<!DOCTYPE html>
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; position: relative; }
-  header { text-align: center; margin-bottom: 28px; position: relative; }
+  .wrap {
+    max-width: 960px; margin: 0 auto; padding: 24px 20px 40px; position: relative;
+    flex: 1; display: flex; flex-direction: column; width: 100%;
+  }
+  header { text-align: center; margin: 32px 0 44px; position: relative; }
   .logo-corner {
     position: fixed; top: 16px; left: 16px;
-    width: 52px; height: 52px; border-radius: 14px;
-    box-shadow: 0 0 0 1px var(--border);
+    width: 52px; height: 52px;
     z-index: 10;
   }
   header h1 {
     font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 33.8px; margin: 0 0 6px; letter-spacing: -0.01em; font-weight: 800;
+    font-size: 76px; margin: 0 0 14px; letter-spacing: 0.02em; font-weight: 800;
     color: var(--text);
+    line-height: 1;
   }
-  header p { color: var(--muted); margin: 0; font-size: 0.95rem; }
+  header p { color: var(--muted); margin: 0; font-size: 1.05rem; }
 
   .search-box {
-    display: flex; gap: 10px; margin: 0 auto 8px;
+    display: flex; gap: 10px; margin: 0 auto 12px;
     max-width: 640px;
   }
+  .dims-hint {
+    text-align: center; color: var(--muted); font-size: 0.82rem; max-width: 640px;
+    margin: 0 auto 32px; line-height: 1.6;
+  }
+  .dims-hint b { color: var(--text); font-weight: 600; }
   input#token-input {
     flex: 1;
     background: var(--panel);
@@ -211,6 +221,12 @@ INDEX_HTML = """<!DOCTYPE html>
     <input id="token-input" type="text" placeholder="e.g. SOL, or a contract address (0x... / Solana mint)" autocomplete="off">
     <button id="analyze-btn">Analyze</button>
   </div>
+  <div class="dims-hint">
+    Every score is built from <b>5 dimensions</b>: <b>Social Buzz</b> (live X mention volume &amp; engagement),
+    <b>News Tone</b> (bullish/bearish tone across live posts), <b>Community Health</b> (Reddit/Telegram/X community size &amp; activity),
+    <b>Liquidity Health</b> (trading volume relative to market depth), and <b>Narrative Momentum</b> (category fit &amp; price trend) &mdash;
+    each scored 0-20 and shown with its own confidence level.
+  </div>
 
   <div id="status"></div>
   <div id="error-box"></div>
@@ -252,6 +268,8 @@ INDEX_HTML = """<!DOCTYPE html>
       </div>
     </div>
   </div>
+
+  <div style="margin-top: auto;"></div>
 
   <details class="docs">
     <summary>How this works</summary>

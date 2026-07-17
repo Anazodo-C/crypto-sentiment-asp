@@ -82,12 +82,12 @@ async def root():
 
 @app.get("/sentimento.png")
 async def logo():
-    """Serves the logo from /public. vercel.json rewrites every path to
-    this function (no separate static-file pipeline), so the asset has to
-    be served through a route rather than relying on Vercel's default
-    /public handling."""
+    """Serves the logo from /public for callers that want a real URL
+    instead of the data: URI embedded in the page itself. NOTE: this may
+    not actually work on Vercel (see app/assets.py docstring for why) -
+    the page's own <img> tag does not depend on this route at all."""
     return FileResponse(
-        _PUBLIC_DIR / "sentimento-256.png",
+        _PUBLIC_DIR / "sentimento-nobg.png",
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=86400"},
     )
