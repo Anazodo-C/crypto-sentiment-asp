@@ -73,7 +73,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
   .search-box {
     display: flex; gap: 12px; margin: 0 auto 12px;
-    max-width: 680px;
+    max-width: 900px;
   }
   .dims-hint {
     text-align: center; color: var(--muted); font-size: 0.82rem; max-width: 640px;
