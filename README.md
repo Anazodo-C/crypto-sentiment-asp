@@ -1,15 +1,47 @@
 # Crypto Sentiment ASP
 
-An A2MCP (Agent-to-MCP) Agent Service Provider for OKX.AI: given a token
-ticker or name, returns a 0-100 Sentiment Score across 5 sub-dimensions
-(Social Buzz, News Tone, Community Health, Developer Activity, Narrative
-Momentum), following the scoring methodology in `crypto_sentiment.md`.
+An A2MCP (Agent-to-MCP) Agent Service Provider for OKX.AI: given a token,
+returns a 0-100 Sentiment Score across 5 sub-dimensions (Social Buzz,
+News Tone, Community Health, Developer Activity, Narrative Momentum),
+following the scoring methodology in `crypto_sentiment.md`.
 
 **Problem it solves:** narrative drives crypto prices as much as
 fundamentals, but reading "the room" across Twitter, Reddit, GitHub, and
 market psychology takes real time. This ASP does it in one call, so
 other agents (trading bots, research agents, portfolio assistants) can
 pull a structured sentiment read instead of doing it themselves.
+
+**Two lookup paths, POST /sentiment body:**
+
+- **Established coins** — `{"token": "SOL"}` (ticker or name). Resolved via
+  CoinGecko's main coin database.
+- **Brand-new / DEX-only tokens** — `{"contract_address": "0x...", "chain": "base"}`.
+  This is the ASP's primary intended use case: CoinGecko's main database
+  requires manual/automated review and lags new listings by hours to days,
+  so ticker lookup simply doesn't work for a token that launched an hour
+  ago. This path uses GeckoTerminal instead (CoinGecko's own DEX-tracking
+  product), which indexes new pools within minutes, keyed by chain +
+  contract address. Supported `chain` values include `ethereum`, `bsc`,
+  `base`, `solana`, `arbitrum`, `polygon`, `avalanche`, `x-layer` (see
+  `app/geckoterminal.py`'s alias map — the X Layer slug specifically is
+  unconfirmed, verify it against `GET /networks` if it 404s).
+
+The two paths return the same response shape, but score differently
+honestly: a brand-new token has no CoinGecko community/developer data at
+all (not "low", genuinely nonexistent), so News Tone, Community Health,
+and Developer Activity come back explicitly marked `"Insufficient Data"`
+with low confidence rather than a misleading estimated number. Social
+Buzz and Narrative Momentum instead lean on GeckoTerminal's on-chain
+transaction counts and price/volume momentum — the closest real signal
+available for a token with no established social presence yet.
+
+**GeckoTerminal not live-tested**: same caveat as CoinGecko/Fear&Greed
+below — this sandbox's network is allowlisted and blocked
+`api.geckoterminal.com`, so `app/geckoterminal.py` is written against
+GeckoTerminal's documented, stable public API shape but hasn't been hit
+live. Test the contract-address path for real after deploying, and
+double check the `x-layer` network slug specifically (least certain
+entry in the alias map).
 
 ## What's real vs. proxy (read this before demoing)
 

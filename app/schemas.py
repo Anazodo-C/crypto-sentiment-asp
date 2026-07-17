@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Assessment = Literal[
     "Euphoric", "Bullish", "Neutral-Positive", "Neutral-Negative", "Bearish", "Capitulation"
@@ -39,13 +39,45 @@ class ContrarianSignal(BaseModel):
 
 
 class SentimentRequest(BaseModel):
-    token: str = Field(..., description="Ticker or CoinGecko slug, e.g. 'SOL' or 'solana'")
+    # Path A: established coin, looked up by ticker/name via CoinGecko.
+    token: Optional[str] = Field(
+        default=None, description="Ticker or CoinGecko slug, e.g. 'SOL' or 'solana'"
+    )
+
+    # Path B: brand-new / DEX-only token, looked up by contract address via
+    # GeckoTerminal (CoinGecko's main coin DB lags days behind for new
+    # listings; GeckoTerminal indexes new pools within minutes). Both
+    # contract_address and chain are required together for this path.
+    contract_address: Optional[str] = Field(
+        default=None, description="Token contract address, e.g. '0x...' or a Solana mint address"
+    )
+    chain: Optional[str] = Field(
+        default=None,
+        description=(
+            "Chain the contract lives on, e.g. 'ethereum', 'bsc', 'base', "
+            "'solana', 'arbitrum', 'polygon', 'x-layer'"
+        ),
+    )
+
     category_hint: Optional[
         Literal["meme", "layer1", "layer2", "defi", "ai-depin", "other"]
     ] = Field(
         default=None,
         description="Optional override for category-specific sub-dimension weighting.",
     )
+
+    @model_validator(mode="after")
+    def _one_lookup_path(self):
+        has_token = bool(self.token)
+        has_contract = bool(self.contract_address and self.chain)
+        if not has_token and not has_contract:
+            raise ValueError(
+                "Provide either 'token' (ticker/name) or both 'contract_address' "
+                "and 'chain' (for new/DEX-only tokens)."
+            )
+        if self.contract_address and not self.chain:
+            raise ValueError("'chain' is required when 'contract_address' is set.")
+        return self
 
 
 class SentimentResponse(BaseModel):

@@ -302,3 +302,114 @@ def build_markdown_report(token_name: str, ticker: str, total: float, subs: dict
         "notes and confidence levels for what's directly measured vs. approximated.*",
     ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# DEX / new-token scoring path (contract_address + chain, via GeckoTerminal)
+#
+# Brand-new tokens don't have CoinGecko community_score / developer_score /
+# sentiment votes - that data simply doesn't exist yet, and for many
+# DEX-only tokens (anonymous devs, no GitHub, no dedicated subreddit) it may
+# never exist. Rather than force these into the CoinGecko-shaped scorers
+# above (which would silently produce misleadingly confident numbers from
+# missing-field defaults), these run on GeckoTerminal's pool data - built
+# for exactly this - and are explicit and low-confidence about the
+# dimensions that have no real signal at all for a token this new.
+# ---------------------------------------------------------------------------
+
+def insufficient_data_score(dimension: str, reason: str) -> SubDimensionScore:
+    """A flat, honest mid-low score for a dimension with no real signal for
+    this token - e.g. no GitHub repo exists for most brand-new DEX tokens.
+    Deliberately not 0 (that implies confirmed bad activity) and not ~10
+    (that implies genuine neutrality) - it's explicitly "unknown", which the
+    low confidence + basis text make clear rather than letting a numeric
+    default masquerade as a measurement.
+    """
+    return SubDimensionScore(
+        score=8.0,
+        assessment="Insufficient Data",
+        confidence="low",
+        basis=reason,
+        data_sources=[],
+    )
+
+
+def score_social_buzz_dex(gt_token: dict, gt_pools: list[dict], twitter: Optional[dict]) -> SubDimensionScore:
+    attrs = (gt_token.get("data") or {}).get("attributes") or {}
+
+    if twitter and twitter.get("available"):
+        mentions = twitter.get("mention_count", 0)
+        engagement = twitter.get("total_engagement", 0)
+        score = _clip(min(20, (mentions / 10) + (engagement / 500)))
+        basis = f"{mentions} mentions / 24h, {engagement} total likes+RTs (live X API)"
+        return SubDimensionScore(
+            score=round(score, 1), assessment=_buzz_label(score), confidence="high",
+            basis=basis, data_sources=["twitter"],
+        )
+
+    # Fallback: on-chain buy/sell transaction count as an activity proxy -
+    # the closest thing to "buzz" GeckoTerminal can measure for a token with
+    # no established social presence yet.
+    total_buys = total_sells = 0
+    for pool in gt_pools[:3]:
+        tx = (pool.get("attributes") or {}).get("transactions", {}) or {}
+        h24 = tx.get("h24", {}) or {}
+        total_buys += h24.get("buys") or 0
+        total_sells += h24.get("sells") or 0
+    total_tx = total_buys + total_sells
+    score = _clip(min(20, total_tx / 20))
+    basis = (
+        f"proxy from {total_tx} on-chain buy/sell transactions in 24h across top pools "
+        f"(no X/Twitter data available: {(twitter or {}).get('reason', 'not configured')})"
+    )
+    return SubDimensionScore(
+        score=round(score, 1), assessment=_buzz_label(score), confidence="low",
+        basis=basis, data_sources=["geckoterminal"],
+    )
+
+
+def _buzz_label(score: float) -> str:
+    return (
+        "Viral" if score >= 17 else "High" if score >= 13 else "Moderate"
+        if score >= 9 else "Low" if score >= 5 else "Dead"
+    )
+
+
+def score_narrative_momentum_dex(gt_token: dict, gt_pools: list[dict], category: str) -> SubDimensionScore:
+    if not gt_pools:
+        return insufficient_data_score(
+            "Narrative Momentum",
+            "no trading pool data available yet - token may be too new or too illiquid to price",
+        )
+    top_pool = (gt_pools[0].get("attributes") or {})
+    price_change_h24 = (top_pool.get("price_change_percentage") or {}).get("h24")
+    volume_h24 = (top_pool.get("volume_usd") or {}).get("h24")
+
+    momentum_component = 8.0
+    if price_change_h24 is not None:
+        try:
+            momentum_component = _clip(8 + float(price_change_h24) / 10, 0, 16)
+        except (TypeError, ValueError):
+            pass
+    volume_component = 0.0
+    if volume_h24:
+        try:
+            v = float(volume_h24)
+            volume_component = 4.0 if v > 100_000 else 2.0 if v > 10_000 else 0.0
+        except (TypeError, ValueError):
+            pass
+
+    score = _clip(momentum_component + volume_component)
+    label = (
+        "Peak Narrative" if score >= 17 else "Strong Alignment" if score >= 13
+        else "Moderate Alignment" if score >= 9 else "Weak Alignment" if score >= 5
+        else "Counter-Narrative"
+    )
+    basis = (
+        f"proxy from 24h price change={price_change_h24}%, 24h pool volume=${volume_h24} "
+        f"(GeckoTerminal top pool), category={category}"
+    )
+    return SubDimensionScore(
+        score=round(score, 1), assessment=label, confidence="low", basis=basis,
+        data_sources=["geckoterminal"],
+    )

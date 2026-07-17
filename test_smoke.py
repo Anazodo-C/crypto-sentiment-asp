@@ -37,6 +37,26 @@ FIXTURE_COIN = {
 
 FIXTURE_FNG = {"value": 62, "label": "Greed", "trend_7d": "rising"}
 
+FIXTURE_GT_TOKEN = {
+    "data": {
+        "attributes": {
+            "name": "Brand New Coin",
+            "symbol": "bnc",
+            "address": "0xNEWTOKEN0000000000000000000000000000001",
+        }
+    }
+}
+
+FIXTURE_GT_POOLS = [
+    {
+        "attributes": {
+            "price_change_percentage": {"h24": "42.5"},
+            "volume_usd": {"h24": "250000"},
+            "transactions": {"h24": {"buys": 310, "sells": 190}},
+        }
+    }
+]
+
 
 def run():
     with patch("app.main.coingecko.resolve_coin_id", new=AsyncMock(
@@ -87,6 +107,43 @@ def run():
         body3 = r3.json()
         assert body3["category"] == "meme"
         print("category override respected:", body3["category"])
+
+        # 5. missing both token and contract_address/chain -> validation error
+        print("\n--- edge case: no lookup path provided ---")
+        r4 = client.post("/sentiment", json={})
+        assert r4.status_code == 422, r4.text
+        print("correctly rejected with 422:", r4.json()["detail"][0]["msg"])
+
+    # 6. new-token path via GeckoTerminal (contract_address + chain)
+    with patch("app.main.geckoterminal.get_token", new=AsyncMock(
+        return_value=FIXTURE_GT_TOKEN
+    )), patch("app.main.geckoterminal.get_token_pools", new=AsyncMock(
+        return_value=FIXTURE_GT_POOLS
+    )), patch("app.main.feargreed.get_fear_greed", new=AsyncMock(
+        return_value=FIXTURE_FNG
+    )), patch("app.main.twitter.get_recent_mentions", new=AsyncMock(
+        return_value={"available": False, "reason": "no bearer token configured"}
+    )):
+        from app.main import app
+        client = TestClient(app)
+
+        print("\n--- new-token path (contract_address + chain) ---")
+        r5 = client.post("/sentiment", json={
+            "contract_address": "0xNEWTOKEN0000000000000000000000000000001",
+            "chain": "base",
+        })
+        assert r5.status_code == 200, r5.text
+        body5 = r5.json()
+        print("token:", body5["token_name"], body5["token_ticker"])
+        print("score:", body5["sentiment_score"], "assessment:", body5["assessment"])
+        for k, v in body5["sub_dimensions"].items():
+            print(f"  {k}: {v['score']}/20 conf={v['confidence']} - {v['basis']}")
+        assert body5["token_name"] == "Brand New Coin"
+        assert body5["token_ticker"] == "BNC"
+        assert body5["sub_dimensions"]["news_tone"]["assessment"] == "Insufficient Data"
+        assert body5["sub_dimensions"]["community_health"]["confidence"] == "low"
+        assert body5["sub_dimensions"]["social_buzz"]["score"] > 0  # on-chain tx proxy kicked in
+        assert any("new/DEX-only path" in w for w in body5["warnings"])
 
         print("\nALL SMOKE TESTS PASSED")
 
