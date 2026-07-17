@@ -166,13 +166,20 @@ INDEX_HTML = """<!DOCTYPE html>
   }
   .dim-card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    padding: 18px; min-width: 0; transition: transform 0.15s ease, border-color 0.15s ease;
+    padding: 18px; min-width: 0; max-width: 100%; overflow: hidden;
+    transition: transform 0.15s ease, border-color 0.15s ease;
   }
   .dim-card:hover { transform: translateY(-2px); border-color: var(--accent-2); }
   .dim-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .dim-score { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
+  .dim-score {
+    font-size: 1.6rem; font-weight: 700; margin-bottom: 4px;
+    overflow-wrap: break-word; word-break: break-word;
+  }
   .dim-score span { font-size: 0.95rem; color: var(--muted); font-weight: 500; }
-  .dim-assessment { font-size: 0.88rem; font-weight: 600; margin-bottom: 8px; }
+  .dim-assessment {
+    font-size: 0.88rem; font-weight: 600; margin-bottom: 8px;
+    overflow-wrap: break-word; word-break: break-word;
+  }
   .conf-badge {
     display: inline-block; font-size: 0.68rem; padding: 2px 8px; border-radius: 999px;
     margin-bottom: 10px; font-weight: 600; letter-spacing: 0.02em;
@@ -180,7 +187,10 @@ INDEX_HTML = """<!DOCTYPE html>
   .conf-high { background: #113325; color: var(--good); }
   .conf-medium { background: #2e2610; color: var(--warn); }
   .conf-low { background: #2a1c14; color: #d89a5c; }
-  .dim-basis { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+  .dim-basis {
+    font-size: 0.78rem; color: var(--muted); line-height: 1.4;
+    overflow-wrap: break-word; word-break: break-word;
+  }
 
   .extra-row { display: flex; gap: 14px; flex-wrap: wrap; }
   .extra-card {
