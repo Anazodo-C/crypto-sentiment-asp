@@ -225,7 +225,7 @@ OKX_API_KEY=...        # from https://web3.okx.com/onchainos/dev-portal
 OKX_SECRET_KEY=...
 OKX_PASSPHRASE=...
 X402_RECEIVING_ADDRESS=0x...   # your Agentic Wallet EVM address
-X402_PRICE_USDC=0.5
+X402_PRICE_USDC=0.1
 ```
 
 Redeploy, then check `GET /health` — `x402_status` should read
