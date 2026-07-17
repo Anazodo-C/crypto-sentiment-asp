@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 
 from app import coingecko, feargreed, geckoterminal, scoring, twitter, x402
+from app.frontend import INDEX_HTML
 from app.schemas import FearGreedContext, SentimentRequest, SentimentResponse
 
 load_dotenv()
@@ -66,17 +68,26 @@ except Exception as e:
     x402_status = "failed_fallback_free"
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
+    """Human-facing report UI: paste a ticker or contract address, get a
+    rendered sentiment report. Other agents should call POST /sentiment
+    directly - see GET /info for a machine-readable description."""
+    return INDEX_HTML
+
+
+@app.get("/info")
+async def info():
     return {
         "name": "Crypto Sentiment ASP",
         "description": (
-            "A2MCP sentiment analysis service for OKX.AI. POST a token ticker "
-            "or name to /sentiment to get a 0-100 Sentiment Score."
+            "A2MCP sentiment analysis service for OKX.AI. POST a token ticker, "
+            "name, or contract address to /sentiment to get a 0-100 Sentiment Score."
         ),
         "endpoints": {
             "GET /health": "liveness check",
-            "POST /sentiment": 'body: {"token": "SOL"}',
+            "POST /sentiment": 'body: {"token": "SOL"} or {"token": "0x..."} or '
+                                '{"contract_address": "0x...", "chain": "base"}',
         },
         "x402_status": x402_status,
         "docs": "/docs",
