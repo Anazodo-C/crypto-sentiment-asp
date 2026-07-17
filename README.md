@@ -186,10 +186,15 @@ just ignore `vercel.json`/`api/` in that case.
 `app/x402.py` wraps `POST /sentiment` with OKX's official seller SDK
 (`okxweb3-app-x402`'s `PaymentMiddlewareASGI`, with
 `OKXAuthConfig`/`OKXFacilitatorClient` for verify+settle against OKX's
-facilitator on X Layer). This is now believed working — see the fix
-below — but hasn't been exercised against a real Buyer payment yet, so
-treat "enabled" as "should work per spec" until you've confirmed a real
-paid call settles.
+facilitator on X Layer).
+
+**Status: enabled and confirmed live.** `GET /health` reports
+`x402_status: "enabled"`, and an unpaid `POST /sentiment` correctly
+returns `402` with a `PAYMENT-REQUIRED` header - the payment gate itself
+is wired up correctly in production. Not yet confirmed: an actual paid
+call settling end-to-end (needs one real payment from a Buyer/Agentic
+Wallet, returning `200` + a `PAYMENT-RESPONSE` settlement receipt) - do
+that before relying on this for revenue-track judging.
 
 **Earlier failure, and the actual root cause.** This previously shipped
 disabled after `ImportError: cannot import name 'OKXAuthConfig' from
@@ -264,8 +269,8 @@ is deployed and reachable:
 - Token resolution (`coingecko.resolve_coin_id`) does simple ticker
   matching; ambiguous tickers (e.g. multiple coins named "SOL"-adjacent)
   could resolve to the wrong coin. Fine for a demo, worth hardening later.
-- x402 payment gate should now work per OKX's documented SDK spec (see
-  above) but hasn't been confirmed against a real settled payment yet -
-  do that before relying on it for a paid listing.
+- x402 payment gate is enabled and confirmed live (402 challenge works)
+  but a real end-to-end paid settlement hasn't been confirmed yet - do
+  that before relying on it for a paid listing.
 - CoinGecko free tier has rate limits; under real load you'd want a
   CoinGecko API key or caching layer.
