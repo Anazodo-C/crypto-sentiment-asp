@@ -61,12 +61,19 @@ async def get_recent_mentions(client: httpx.AsyncClient, query: str) -> dict | N
             + (t.get("quoteCount") or 0)
             for t in tweets
         )
+        # Raw tweet text, so scoring.py can run keyword-based tone analysis
+        # for News Tone instead of leaving it as a flat CoinGecko proxy /
+        # Insufficient Data - this is real live text we're already paying
+        # to fetch for Social Buzz, just not previously used for anything
+        # beyond counting.
+        texts = [t.get("text") for t in tweets if t.get("text")]
         return {
             "available": True,
             "mention_count": len(tweets),
             "total_engagement": total_engagement,
             "sample_size": len(tweets),
             "has_more": data.get("has_next_page", False),
+            "texts": texts,
         }
     except Exception as e:
         return {"available": False, "reason": f"error: {e}"}

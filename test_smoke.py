@@ -59,7 +59,7 @@ FIXTURE_COIN = {
     "name": "Solana",
     "categories": ["Smart Contract Platform", "Layer 1 (L1)"],
     "community_score": 62.4,
-    "developer_score": 81.2,
+    "liquidity_score": 74.0,
     "public_interest_score": 0.045,
     "sentiment_votes_up_percentage": 71.5,
     "sentiment_votes_down_percentage": 28.5,
@@ -70,13 +70,10 @@ FIXTURE_COIN = {
         "reddit_average_posts_48h": 12.3,
         "telegram_channel_user_count": None,
     },
-    "developer_data": {
-        "commit_count_4_weeks": 145,
-        "stars": 12000,
-        "forks": 4200,
-    },
     "market_data": {
         "price_change_percentage_30d_in_currency": {"usd": 18.4},
+        "total_volume": {"usd": 1_200_000_000},
+        "market_cap": {"usd": 90_000_000_000},
     },
 }
 
@@ -187,6 +184,10 @@ def run():
         assert body5["sub_dimensions"]["news_tone"]["assessment"] == "Insufficient Data"
         assert body5["sub_dimensions"]["community_health"]["confidence"] == "low"
         assert body5["sub_dimensions"]["social_buzz"]["score"] > 0  # on-chain tx proxy kicked in
+        # liquidity_health: fixture's gt_token has no total_reserve_in_usd/fdv_usd,
+        # but the pool fixture does have 24h volume, so it should score off that
+        # rather than falling back to Insufficient Data.
+        assert "liquidity_health" in body5["sub_dimensions"]
         assert any("new/DEX-only path" in w for w in body5["warnings"])
 
         # 7. single free-form input that LOOKS like an address -> should

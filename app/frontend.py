@@ -212,7 +212,7 @@ const DIM_LABELS = {
   social_buzz: 'Social Buzz',
   news_tone: 'News Tone',
   community_health: 'Community Health',
-  developer_activity: 'Developer Activity',
+  liquidity_health: 'Liquidity Health',
   narrative_momentum: 'Narrative Momentum',
 };
 

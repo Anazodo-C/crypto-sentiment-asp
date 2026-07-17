@@ -2,8 +2,9 @@
 
 An A2MCP (Agent-to-MCP) Agent Service Provider for OKX.AI: given a token,
 returns a 0-100 Sentiment Score across 5 sub-dimensions (Social Buzz,
-News Tone, Community Health, Developer Activity, Narrative Momentum),
-following the scoring methodology in `crypto_sentiment.md`.
+News Tone, Community Health, Liquidity Health, Narrative Momentum),
+following the scoring methodology in `crypto_sentiment.md` (with
+Developer Activity swapped for Liquidity Health — see below).
 
 **Problem it solves:** narrative drives crypto prices as much as
 fundamentals, but reading "the room" across Twitter, Reddit, GitHub, and
@@ -27,13 +28,19 @@ pull a structured sentiment read instead of doing it themselves.
   unconfirmed, verify it against `GET /networks` if it 404s).
 
 The two paths return the same response shape, but score differently
-honestly: a brand-new token has no CoinGecko community/developer data at
-all (not "low", genuinely nonexistent), so News Tone, Community Health,
-and Developer Activity come back explicitly marked `"Insufficient Data"`
-with low confidence rather than a misleading estimated number. Social
-Buzz and Narrative Momentum instead lean on GeckoTerminal's on-chain
-transaction counts and price/volume momentum — the closest real signal
-available for a token with no established social presence yet.
+honestly: a genuinely unlisted brand-new token has no CoinGecko
+community data at all (not "low", nonexistent), so News Tone and
+Community Health come back explicitly marked `"Insufficient Data"` with
+low confidence rather than a misleading estimated number. Liquidity
+Health and Social Buzz instead lean on GeckoTerminal's pool
+reserve/volume and on-chain transaction counts — real signal available
+even with no established social presence yet. If GeckoTerminal's own
+data links the token to a CoinGecko coin id (`coingecko_coin_id` — common
+even for fairly new tokens, since GeckoTerminal indexes far faster and
+cross-references CoinGecko once a listing exists), the ASP opportunistically
+enriches News Tone, Community Health, and Liquidity Health with real
+CoinGecko data instead of falling back to Insufficient Data — check the
+`warnings` array for `"also listed on CoinGecko"` to see when this kicked in.
 
 **GeckoTerminal not live-tested**: same caveat as CoinGecko/Fear&Greed
 below — this sandbox's network is allowlisted and blocked
@@ -49,11 +56,20 @@ This ships honest about its data sources rather than overclaiming:
 
 | Sub-dimension | Source | Confidence |
 |---|---|---|
-| Community Health | CoinGecko `community_score` + Reddit/Telegram subscriber counts | **Direct** measurement |
-| Developer Activity | CoinGecko `developer_score` + GitHub commits/stars/forks | **Direct** measurement |
-| Social Buzz | Live tweet search via twitterapi.io if a valid key is set; falls back to CoinGecko follower count + sentiment votes | Direct if the API call succeeds, else **proxy** |
-| News Tone | CoinGecko `public_interest_score` + sentiment votes + price momentum | **Proxy** (no live headline source wired up) |
-| Narrative Momentum | CoinGecko category + market cap rank + 30d price momentum | **Proxy** (no live narrative/news source) |
+| Community Health | CoinGecko `community_score` if populated; else log-scaled Reddit/Telegram/X follower counts directly (the `_score` field is frequently null even for established coins — falling back to a flat default there was producing near-identical scores across unrelated tokens) | **Direct** if `community_score` present, else **proxy** |
+| Liquidity Health | CoinGecko `liquidity_score`, or 24h volume/market cap ratio (established coins); pool reserve depth + volume turnover via GeckoTerminal (new/DEX tokens) | Direct or **proxy** depending on data availability |
+| Social Buzz | Live tweet search via twitterapi.io if a valid key is set; falls back to log-scaled follower count + sentiment votes (established) or log-scaled on-chain tx count (new tokens) | Direct if the API call succeeds, else **proxy** |
+| News Tone | Keyword bullish/bearish tone tally over live tweet text we already fetch for Social Buzz, if available; else CoinGecko `public_interest_score` + sentiment votes + price momentum | **Proxy** either way (no live headline/news API wired up) |
+| Narrative Momentum | CoinGecko category + market cap rank + 30d price momentum (established); 24h price change + pool volume via GeckoTerminal (new tokens) | **Proxy** (no live narrative/news source) |
+
+**Why Liquidity Health replaced Developer Activity:** GitHub commit
+activity is a weak-to-irrelevant sentiment signal for most of today's
+tokens — anonymous devs, no public repo, pure memecoins — and it was
+also the one dimension that flatly didn't apply to this ASP's primary
+use case (brand-new DEX tokens almost never have a linked GitHub repo,
+so it was always `"Insufficient Data"` on that path anyway). Liquidity
+depth and volume turnover are real signals of market health/confidence
+and are computable for established coins and new tokens alike.
 
 Every response includes a `confidence` field per sub-dimension and a
 `basis` string explaining exactly what data produced the score, plus a

@@ -124,19 +124,26 @@ async def _lookup_established_coin(req: SentimentRequest, client: httpx.AsyncCli
         reason = (twitter_data or {}).get("reason", "no bearer token configured")
         warnings.append(f"Live X/Twitter data unavailable ({reason}); used CoinGecko proxy instead.")
 
+    # News Tone: prefer real keyword-tone analysis of live tweet text over
+    # the CoinGecko-derived proxy, when we have tweets to analyze.
+    tweet_texts = (twitter_data or {}).get("texts") or []
+    news_tone = (
+        scoring.score_news_tone_from_tweets(tweet_texts)
+        if tweet_texts
+        else scoring.score_news_tone(coin)
+    )
+
     category = scoring.detect_category(coin.get("categories", []), req.category_hint)
     sub_scores = {
         "social_buzz": scoring.score_social_buzz(coin, twitter_data),
-        "news_tone": scoring.score_news_tone(coin),
+        "news_tone": news_tone,
         "community_health": scoring.score_community_health(coin),
-        "developer_activity": scoring.score_developer_activity(coin),
+        "liquidity_health": scoring.score_liquidity_health(coin),
         "narrative_momentum": scoring.score_narrative_momentum(coin, category),
     }
 
     if coin.get("community_data", {}).get("reddit_subscribers") is None:
         warnings.append("No dedicated subreddit data found; Community Health score is confidence-discounted.")
-    if not (coin.get("developer_data") or {}).get("commit_count_4_weeks"):
-        warnings.append("No recent GitHub commit data found; Developer Activity score is confidence-discounted.")
 
     return resolved["name"], resolved["symbol"], category, sub_scores
 
@@ -184,26 +191,74 @@ async def _lookup_new_token(
             "count as a Social Buzz proxy instead."
         )
 
+    # Many tokens that are "new" to CoinGecko's curated database are
+    # actually already linked to a CoinGecko coin id in GeckoTerminal's own
+    # data (GeckoTerminal indexes far faster and often cross-references
+    # CoinGecko once a listing exists). When that link is present, use it
+    # to get real Community Health / Liquidity data instead of flatly
+    # marking every DEX-path lookup as Insufficient Data - only genuinely
+    # unlisted tokens should fall back to that.
+    enriched_coin = None
+    cg_id = attrs.get("coingecko_coin_id")
+    if cg_id:
+        try:
+            enriched_coin = await coingecko.get_coin_data(client, cg_id)
+        except coingecko.CoinGeckoError:
+            enriched_coin = None
+
     category = req.category_hint or "other"
+    insufficient_dims: list[str] = []
+
+    tweet_texts = (twitter_data or {}).get("texts") or []
+    if tweet_texts:
+        news_tone = scoring.score_news_tone_from_tweets(tweet_texts)
+    elif enriched_coin:
+        news_tone = scoring.score_news_tone(enriched_coin)
+    else:
+        news_tone = scoring.insufficient_data_score(
+            "News Tone", "no headline/news source covers unlisted tokens this new"
+        )
+        insufficient_dims.append("News Tone")
+
+    if enriched_coin:
+        community_health = scoring.score_community_health(enriched_coin)
+        category = req.category_hint or scoring.detect_category(
+            enriched_coin.get("categories", []), None
+        )
+    else:
+        community_health = scoring.insufficient_data_score(
+            "Community Health", "no CoinGecko community data exists yet for an unlisted token"
+        )
+        insufficient_dims.append("Community Health")
+
+    if enriched_coin:
+        liquidity_health = scoring.score_liquidity_health(enriched_coin)
+    else:
+        liquidity_health = scoring.score_liquidity_health_dex(gt_token, gt_pools)
+        if liquidity_health.assessment == "Insufficient Data":
+            insufficient_dims.append("Liquidity Health")
+
     sub_scores = {
         "social_buzz": scoring.score_social_buzz_dex(gt_token, gt_pools, twitter_data),
-        "news_tone": scoring.insufficient_data_score(
-            "News Tone", "no headline/news source covers unlisted tokens this new"
-        ),
-        "community_health": scoring.insufficient_data_score(
-            "Community Health", "no CoinGecko community data exists yet for an unlisted token"
-        ),
-        "developer_activity": scoring.insufficient_data_score(
-            "Developer Activity", "no linked GitHub repo - common for brand-new/anonymous-dev tokens"
-        ),
+        "news_tone": news_tone,
+        "community_health": community_health,
+        "liquidity_health": liquidity_health,
         "narrative_momentum": scoring.score_narrative_momentum_dex(gt_token, gt_pools, category),
     }
 
-    warnings.append(
-        "This token was looked up by contract address (new/DEX-only path): News Tone, "
-        "Community Health, and Developer Activity have no real data source for a token "
-        "this new and are marked Insufficient Data rather than estimated."
-    )
+    if enriched_coin:
+        warnings.append(
+            f"Token is also listed on CoinGecko (id='{cg_id}') - enriched Community Health"
+            + (" and News Tone" if not tweet_texts else "")
+            + " with real CoinGecko data instead of marking them Insufficient Data."
+        )
+    if insufficient_dims:
+        warnings.append(
+            "This token was looked up by contract address (new/DEX-only path): "
+            + ", ".join(insufficient_dims)
+            + " have no real data source for a token this new/unlisted and "
+            "are marked Insufficient Data rather than estimated."
+        )
 
     return name, symbol, category, sub_scores
 
