@@ -33,13 +33,18 @@ app = FastAPI(
 # check included). If it fails, we log loudly and fall back to serving
 # /sentiment for free rather than 500ing on every request.
 x402_status = "disabled"
+x402_error: str | None = None
 try:
     _x402_mw = x402.build_middleware()
     if _x402_mw:
         _middleware_class, _mw_kwargs = _x402_mw
         app.add_middleware(_middleware_class, **_mw_kwargs)
         x402_status = "enabled"
-except Exception:
+except Exception as e:
+    # Surface the real error via the API itself (repr + type), not just
+    # logs - Vercel's log tab has repeatedly been hard to get a straight
+    # answer from mid-build, and this needs to be debuggable without it.
+    x402_error = f"{type(e).__name__}: {e}"
     logger.exception(
         "x402 payment middleware failed to initialize - falling back to a "
         "FREE /sentiment endpoint. Fix env vars / the okxweb3-app-x402 "
@@ -71,6 +76,7 @@ async def health():
         "status": "ok",
         "time": datetime.now(timezone.utc).isoformat(),
         "x402_status": x402_status,
+        "x402_error": x402_error,
     }
 
 
