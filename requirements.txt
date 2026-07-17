@@ -7,4 +7,8 @@ python-dotenv==1.0.1
 # Requires Python >=3.11. Vercel's default Python runtime is 3.12, so this
 # is fine there. NOT installable in the local build sandbox (Python 3.10) -
 # could not be pip-installed or exercised locally; verify after deploying.
+# The evm extra pulls in eth_account/web3 etc., required for the `exact`
+# scheme's signing/verification - without it, ExactEvmScheme import fails
+# at runtime with "ImportError: EVM mechanism requires ethereum packages."
 okxweb3-app-x402
+x402[evm]
