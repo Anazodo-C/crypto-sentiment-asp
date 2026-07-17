@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import httpx
@@ -10,6 +11,7 @@ from app import coingecko, feargreed, scoring, twitter, x402
 from app.schemas import FearGreedContext, SentimentRequest, SentimentResponse
 
 load_dotenv()
+logger = logging.getLogger("crypto_sentiment_asp")
 
 app = FastAPI(
     title="Crypto Sentiment ASP",
@@ -25,10 +27,25 @@ app = FastAPI(
 # OKX's PaymentMiddlewareASGI (see app/x402.py) - unpaid requests never
 # reach the handler below at all. If disabled/unset, the route is free and
 # runs exactly as written.
-_x402_mw = x402.build_middleware()
-if _x402_mw:
-    _middleware_class, _mw_kwargs = _x402_mw
-    app.add_middleware(_middleware_class, **_mw_kwargs)
+#
+# This setup is wrapped defensively: a broken/misconfigured payment
+# integration must NOT be able to take down every route in the app (health
+# check included). If it fails, we log loudly and fall back to serving
+# /sentiment for free rather than 500ing on every request.
+x402_status = "disabled"
+try:
+    _x402_mw = x402.build_middleware()
+    if _x402_mw:
+        _middleware_class, _mw_kwargs = _x402_mw
+        app.add_middleware(_middleware_class, **_mw_kwargs)
+        x402_status = "enabled"
+except Exception:
+    logger.exception(
+        "x402 payment middleware failed to initialize - falling back to a "
+        "FREE /sentiment endpoint. Fix env vars / the okxweb3-app-x402 "
+        "integration, then redeploy."
+    )
+    x402_status = "failed_fallback_free"
 
 
 @app.get("/")
@@ -43,13 +60,18 @@ async def root():
             "GET /health": "liveness check",
             "POST /sentiment": 'body: {"token": "SOL"}',
         },
+        "x402_status": x402_status,
         "docs": "/docs",
     }
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+    return {
+        "status": "ok",
+        "time": datetime.now(timezone.utc).isoformat(),
+        "x402_status": x402_status,
+    }
 
 
 @app.post("/sentiment", response_model=SentimentResponse)
