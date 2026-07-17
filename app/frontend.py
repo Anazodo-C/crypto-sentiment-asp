@@ -11,7 +11,8 @@ INDEX_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Crypto Sentiment ASP</title>
+<title>Sentimento</title>
+<link rel="icon" href="/sentimento.png">
 <style>
   :root {
     --bg: #0b0e14;
@@ -25,18 +26,35 @@ INDEX_HTML = """<!DOCTYPE html>
     --warn: #f4b740;
     --bad: #f87171;
     --good: #34d399;
+    --violet: #a78bfa;
+    --orange: #fb923c;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: var(--bg);
+    background:
+      radial-gradient(700px circle at 12% -10%, rgba(52, 211, 153, 0.14), transparent 60%),
+      radial-gradient(700px circle at 88% 0%, rgba(167, 139, 250, 0.14), transparent 60%),
+      radial-gradient(900px circle at 50% 100%, rgba(251, 146, 60, 0.08), transparent 60%),
+      var(--bg);
+    background-attachment: fixed;
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
     min-height: 100vh;
   }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; }
-  header { text-align: center; margin-bottom: 28px; }
-  header h1 { font-size: 1.6rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; position: relative; }
+  header { text-align: center; margin-bottom: 28px; position: relative; }
+  .logo-corner {
+    position: absolute; top: -6px; right: 0;
+    width: 52px; height: 52px; border-radius: 14px;
+    box-shadow: 0 0 0 1px var(--border), 0 6px 20px rgba(0,0,0,0.4);
+  }
+  header h1 {
+    font-size: 1.8rem; margin: 0 0 6px; letter-spacing: -0.01em; font-weight: 800;
+    background: linear-gradient(90deg, var(--good), var(--accent-2) 55%, var(--violet));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    display: inline-block;
+  }
   header p { color: var(--muted); margin: 0; font-size: 0.95rem; }
 
   .search-box {
@@ -53,22 +71,23 @@ INDEX_HTML = """<!DOCTYPE html>
     font-size: 1rem;
     outline: none;
   }
-  input#token-input:focus { border-color: var(--accent-2); }
+  input#token-input:focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
   button#analyze-btn {
-    background: var(--accent);
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
     color: #06281d;
     border: none;
     padding: 14px 22px;
     border-radius: 10px;
-    font-weight: 600;
+    font-weight: 700;
     font-size: 1rem;
     cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+  button#analyze-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(110, 231, 183, 0.25);
   }
   button#analyze-btn:disabled { opacity: 0.6; cursor: default; }
-  .hint {
-    text-align: center; color: var(--muted); font-size: 0.82rem; max-width: 640px;
-    margin: 0 auto 32px;
-  }
 
   #status { text-align: center; color: var(--muted); margin: 24px 0; min-height: 1.2em; }
   #error-box {
@@ -81,11 +100,12 @@ INDEX_HTML = """<!DOCTYPE html>
   #report { display: none; }
 
   .verdict-card {
-    background: var(--panel);
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
     border: 1px solid var(--border);
     border-radius: 16px;
     padding: 28px;
     margin-bottom: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.25);
   }
   .verdict-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
   .token-name { font-size: 1.4rem; font-weight: 700; }
@@ -101,7 +121,11 @@ INDEX_HTML = """<!DOCTYPE html>
   .assessment-pill {
     padding: 6px 16px; border-radius: 999px; font-weight: 600; font-size: 0.95rem;
   }
-  .verdict-text { color: var(--text); line-height: 1.55; font-size: 0.98rem; }
+  .signal-line {
+    color: var(--text); line-height: 1.6; font-size: 0.95rem; margin-bottom: 8px;
+  }
+  .signal-line b { font-weight: 700; }
+  .verdict-caveat { color: var(--muted); line-height: 1.55; font-size: 0.88rem; }
 
   .disclaimer {
     max-width: 100%;
@@ -111,12 +135,15 @@ INDEX_HTML = """<!DOCTYPE html>
   }
 
   .cards-row {
-    display: flex; gap: 14px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 22px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 14px; margin-bottom: 22px; max-width: 100%;
   }
   .dim-card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    padding: 18px; flex: 1 1 0; min-width: 180px;
+    padding: 18px; min-width: 0; transition: transform 0.15s ease, border-color 0.15s ease;
   }
+  .dim-card:hover { transform: translateY(-2px); border-color: var(--accent-2); }
   .dim-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.03em; }
   .dim-score { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
   .dim-score span { font-size: 0.95rem; color: var(--muted); font-weight: 500; }
@@ -133,20 +160,41 @@ INDEX_HTML = """<!DOCTYPE html>
   .extra-row { display: flex; gap: 14px; flex-wrap: wrap; }
   .extra-card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    padding: 16px 18px; flex: 1 1 260px;
+    padding: 16px 18px; flex: 1 1 260px; min-width: 0;
+    transition: border-color 0.15s ease;
   }
+  .extra-card:hover { border-color: var(--violet); }
   .extra-card h3 { margin: 0 0 8px; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
   .extra-card p, .extra-card li { font-size: 0.88rem; line-height: 1.5; margin: 0 0 4px; }
   .extra-card ul { margin: 0; padding-left: 18px; }
 
-  footer { text-align: center; color: var(--muted); font-size: 0.78rem; margin-top: 40px; }
+  .docs {
+    max-width: 640px; margin: 48px auto 0; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 14px; padding: 4px 20px;
+  }
+  .docs summary {
+    cursor: pointer; padding: 14px 0; font-weight: 600; font-size: 0.92rem;
+    color: var(--text); list-style: none;
+  }
+  .docs summary::-webkit-details-marker { display: none; }
+  .docs summary::before { content: '+ '; color: var(--accent); font-weight: 800; }
+  .docs[open] summary::before { content: '- '; }
+  .docs-body { padding: 0 0 18px; color: var(--muted); font-size: 0.86rem; line-height: 1.6; }
+  .docs-body p { margin: 0 0 10px; }
+  .docs-body code {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; color: var(--accent-2); font-size: 0.84em;
+  }
+
+  footer { text-align: center; color: var(--muted); font-size: 0.78rem; margin-top: 24px; }
   footer a { color: var(--accent-2); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>Crypto Sentiment ASP</h1>
+    <img src="/sentimento.png" alt="Sentimento" class="logo-corner">
+    <h1>Sentimento</h1>
     <p>Paste a ticker or a contract address. We auto-detect the chain and score sentiment across 5 dimensions.</p>
   </header>
 
@@ -154,7 +202,6 @@ INDEX_HTML = """<!DOCTYPE html>
     <input id="token-input" type="text" placeholder="e.g. SOL, or a contract address (0x... / Solana mint)" autocomplete="off">
     <button id="analyze-btn">Analyze</button>
   </div>
-  <div class="hint">Established coins are resolved via CoinGecko. New / DEX-only tokens are resolved via GeckoTerminal with the chain auto-detected.</div>
 
   <div id="status"></div>
   <div id="error-box"></div>
@@ -173,7 +220,8 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="score-max">/100</div>
         <div class="assessment-pill" id="r-assessment"></div>
       </div>
-      <div class="verdict-text" id="r-verdict"></div>
+      <div class="signal-line" id="r-signals"></div>
+      <div class="verdict-caveat" id="r-verdict"></div>
     </div>
 
     <div class="disclaimer" id="r-disclaimer"></div>
@@ -196,8 +244,18 @@ INDEX_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <details class="docs">
+    <summary>How this works</summary>
+    <div class="docs-body">
+      <p><b>Established coins</b> (e.g. <code>SOL</code>, <code>BTC</code>) are resolved via CoinGecko's main coin database.</p>
+      <p><b>New / DEX-only tokens</b> — paste a contract address (<code>0x...</code> or a Solana mint) and the chain is auto-detected via GeckoTerminal, which indexes new pools within minutes of launch instead of the hours-to-days CoinGecko's curated listing process takes. This is Sentimento's primary use case.</p>
+      <p>Every sub-dimension carries a <code>confidence</code> level and a <code>basis</code> string explaining exactly what data produced it — proxy-derived and Insufficient Data scores are labeled as such rather than presented as precise measurements.</p>
+      <p>This is an A2MCP endpoint for OKX.AI &middot; <code>POST /sentiment</code> &middot; <a href="/docs">full API docs</a></p>
+    </div>
+  </details>
+
   <footer>
-    A2MCP endpoint for OKX.AI &middot; POST /sentiment &middot; <a href="/docs">API docs</a>
+    Sentimento &middot; for research/educational use only, not financial advice
   </footer>
 </div>
 
@@ -268,6 +326,17 @@ function render(data) {
   const color = assessmentColor(data.assessment);
   pill.style.background = color + '22';
   pill.style.color = color;
+
+  const strongDim = data.sub_dimensions[data.strongest_signal];
+  const weakDim = data.sub_dimensions[data.weakest_signal];
+  const strongLabel = DIM_LABELS[data.strongest_signal] || data.strongest_signal;
+  const weakLabel = DIM_LABELS[data.weakest_signal] || data.weakest_signal;
+  document.getElementById('r-signals').innerHTML =
+    `Strongest signal: <b style="color:var(--good)">${strongLabel}</b>` +
+    (strongDim ? ` (${strongDim.score}/20)` : '') +
+    ` &nbsp;&middot;&nbsp; Weakest signal: ` +
+    `<b style="color:${weakDim ? assessmentColor(weakDim.assessment) : 'var(--warn)'}">${weakLabel}</b>` +
+    (weakDim ? ` (${weakDim.score}/20)` : '');
 
   document.getElementById('r-verdict').textContent = data.verdict;
   document.getElementById('r-disclaimer').textContent = '⚠ ' + data.disclaimer;

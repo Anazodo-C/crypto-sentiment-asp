@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app import coingecko, feargreed, geckoterminal, scoring, twitter, x402
 from app.frontend import INDEX_HTML
@@ -29,7 +30,7 @@ def _looks_like_address(value: str) -> bool:
     return bool(_EVM_ADDRESS_RE.match(value) or _SOLANA_ADDRESS_RE.match(value))
 
 app = FastAPI(
-    title="Crypto Sentiment ASP",
+    title="Sentimento",
     description=(
         "A2MCP sentiment analysis service for OKX.AI. Given a token ticker/name, "
         "returns a 0-100 Sentiment Score across 5 sub-dimensions, per the "
@@ -68,6 +69,9 @@ except Exception as e:
     x402_status = "failed_fallback_free"
 
 
+_PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Human-facing report UI: paste a ticker or contract address, get a
@@ -76,10 +80,23 @@ async def root():
     return INDEX_HTML
 
 
+@app.get("/sentimento.png")
+async def logo():
+    """Serves the logo from /public. vercel.json rewrites every path to
+    this function (no separate static-file pipeline), so the asset has to
+    be served through a route rather than relying on Vercel's default
+    /public handling."""
+    return FileResponse(
+        _PUBLIC_DIR / "sentimento-256.png",
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/info")
 async def info():
     return {
-        "name": "Crypto Sentiment ASP",
+        "name": "Sentimento",
         "description": (
             "A2MCP sentiment analysis service for OKX.AI. POST a token ticker, "
             "name, or contract address to /sentiment to get a 0-100 Sentiment Score."
@@ -141,9 +158,6 @@ async def _lookup_established_coin(req: SentimentRequest, client: httpx.AsyncCli
         "liquidity_health": scoring.score_liquidity_health(coin),
         "narrative_momentum": scoring.score_narrative_momentum(coin, category),
     }
-
-    if coin.get("community_data", {}).get("reddit_subscribers") is None:
-        warnings.append("No dedicated subreddit data found; Community Health score is confidence-discounted.")
 
     return resolved["name"], resolved["symbol"], category, sub_scores
 
@@ -296,13 +310,16 @@ async def sentiment(req: SentimentRequest, request: Request):
     assessment = scoring.composite_assessment(total)
     contrarian = scoring.contrarian_signals(total, fng)
 
+    strongest_signal = max(sub_scores.items(), key=lambda kv: kv[1].score)[0]
+    weakest_signal = min(sub_scores.items(), key=lambda kv: kv[1].score)[0]
+
+    # Name/score/assessment are already shown in the verdict card header -
+    # restating them here just duplicated the same three facts twice on
+    # screen. This is now just the caveat; strongest/weakest signal are
+    # structured fields the frontend highlights directly instead.
     verdict = (
-        f"{name} ({symbol}) scores {total:.1f}/100 ({assessment}). "
-        f"Strongest signal: "
-        f"{max(sub_scores.items(), key=lambda kv: kv[1].score)[0].replace('_', ' ')}. "
-        f"Weakest signal: {min(sub_scores.items(), key=lambda kv: kv[1].score)[0].replace('_', ' ')}. "
-        f"Treat proxy-based and Insufficient Data sub-dimensions (see confidence field) "
-        f"as directional at best, not precise."
+        "Treat proxy-based and Insufficient Data sub-dimensions (see confidence field) "
+        "as directional at best, not precise."
     )
 
     return SentimentResponse(
@@ -315,6 +332,8 @@ async def sentiment(req: SentimentRequest, request: Request):
         sub_dimensions=sub_scores,
         fear_greed=fng,
         contrarian_signals=contrarian,
+        strongest_signal=strongest_signal,
+        weakest_signal=weakest_signal,
         verdict=verdict,
         warnings=warnings,
     )

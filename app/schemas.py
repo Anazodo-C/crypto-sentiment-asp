@@ -94,6 +94,12 @@ class SentimentResponse(BaseModel):
     fear_greed: FearGreedContext
     contrarian_signals: list[ContrarianSignal]
 
+    # Dimension keys (e.g. "narrative_momentum") for the highest/lowest
+    # scoring sub-dimension - lets the frontend highlight them directly
+    # instead of restating name/score/assessment a second time in prose.
+    strongest_signal: str
+    weakest_signal: str
+
     verdict: str
     disclaimer: str = (
         "For educational/research purposes only. Not financial advice. "
