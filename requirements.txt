@@ -3,3 +3,8 @@ uvicorn[standard]==0.30.6
 httpx==0.27.2
 pydantic==2.9.2
 python-dotenv==1.0.1
+
+# Requires Python >=3.11. Vercel's default Python runtime is 3.12, so this
+# is fine there. NOT installable in the local build sandbox (Python 3.10) -
+# could not be pip-installed or exercised locally; verify after deploying.
+okxweb3-app-x402

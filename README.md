@@ -133,25 +133,42 @@ Other Python hosts (Render, Fly.io, Railway) also work if you'd rather
 run `uvicorn app.main:app` directly instead of the Vercel adapter —
 just ignore `vercel.json`/`api/` in that case.
 
-## x402 payment integration - NOT DONE YET
+## x402 payment integration
 
-`app/x402.py` is a stub. `X402_ENABLED=false` by default so you can build
-and demo the scoring logic without a live payment rail blocking you.
-Before this counts as a real paid A2MCP listing, you need to:
+`app/x402.py` wraps `POST /sentiment` with OKX's official seller SDK
+(`okxweb3-app-x402`'s `PaymentMiddlewareASGI`), which does real
+verify+settle against OKX's facilitator on X Layer (`eip155:196`,
+`exact` scheme) — not a placeholder check.
 
-1. Follow the OKX.AI ASP tutorial (https://www.okx.ai/tutorial/asp) to
-   install Onchain OS, log into the Agentic Wallet, and get your
-   receiving address / Agent Identity.
-2. Wire real payment verification into `check_payment()` in `x402.py` -
-   right now it just checks that an `X-PAYMENT` header is present, it
-   does NOT verify it. That's the single highest-risk placeholder in
-   this codebase - don't ship it as-is if you're actually taking payment.
-3. Set `X402_ENABLED=true` and the other `X402_*` env vars once verified.
+**Not live-tested**: this package requires Python >=3.11, and the sandbox
+this was built in only has Python 3.10, so it could not be pip-installed
+or exercised locally. Vercel's default Python runtime is 3.12, so
+installation there should be fine, but you must verify a real payment
+end-to-end after deploying — don't take this on faith.
 
-If you're short on time, list it as a **free A2MCP endpoint** instead
-(just remove/skip the payment gate entirely) - free services are
-explicitly supported and don't need x402 at all, per the OKX.AI tutorial.
-This is the safer choice if today is your only build day.
+To enable paid mode, set these env vars (see `.env.example`):
+
+1. `OKX_API_KEY` / `OKX_SECRET_KEY` / `OKX_PASSPHRASE` — from the
+   [OKX Developer Portal](https://web3.okx.com/onchain-os/dev-portal)
+   (separate from your Agentic Wallet login).
+2. `X402_RECEIVING_ADDRESS` — your EVM wallet address (run
+   `onchainos wallet status` in an agent session logged into your
+   Agentic Wallet).
+3. `X402_PRICE_USDC` — human-readable price per call (e.g. `"0.5"`).
+4. `X402_ENABLED=true` — only after 1-3 are filled in AND you've tested
+   a real payment. If `X402_ENABLED=true` but any var is missing, the app
+   fails loudly at startup (`RuntimeError`) rather than silently serving
+   requests as if they were paid — check your deploy logs if it won't boot.
+
+**Testing it for real** means: pay the live endpoint from a wallet with
+actual funds on X Layer and confirm the settlement receipt / `PAYMENT-RESPONSE`
+header comes back correctly, and that an unpaid request genuinely gets a
+402. Scoring logic passing a smoke test is not the same as payment working.
+
+If you're short on time, leave `X402_ENABLED=false` and list it as a
+**free A2MCP endpoint** instead — free services are explicitly supported
+per the OKX.AI tutorial, and you can flip this on later without
+re-registering from scratch.
 
 ## Registering as an ASP on OKX.AI
 

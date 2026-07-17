@@ -21,6 +21,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# x402 payment gate. If X402_ENABLED=true, this wraps POST /sentiment with
+# OKX's PaymentMiddlewareASGI (see app/x402.py) - unpaid requests never
+# reach the handler below at all. If disabled/unset, the route is free and
+# runs exactly as written.
+_x402_mw = x402.build_middleware()
+if _x402_mw:
+    _middleware_class, _mw_kwargs = _x402_mw
+    app.add_middleware(_middleware_class, **_mw_kwargs)
+
 
 @app.get("/")
 async def root():
@@ -45,9 +54,8 @@ async def health():
 
 @app.post("/sentiment", response_model=SentimentResponse)
 async def sentiment(req: SentimentRequest, request: Request):
-    if not await x402.check_payment(request):
-        return x402.payment_required_response()
-
+    # Payment gating (if enabled) already happened in PaymentMiddlewareASGI
+    # before this handler runs - an unpaid/unverified request never gets here.
     warnings: list[str] = []
 
     async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
