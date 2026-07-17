@@ -85,3 +85,29 @@ async def get_token_pools(client: httpx.AsyncClient, network: str, address: str)
         return resp.json().get("data", [])
     except Exception:
         return []
+
+
+async def detect_network(client: httpx.AsyncClient, address: str) -> str | None:
+    """Auto-detect which chain a contract address lives on, so the caller
+    doesn't have to specify `chain` up front - searches GeckoTerminal's
+    cross-network pool search and reads the network off the first match.
+
+    Returns the GeckoTerminal network slug, or None if no pool anywhere
+    matches this address (e.g. genuinely not found, or too new/no pool yet).
+    """
+    try:
+        resp = await client.get(
+            f"{GECKOTERMINAL_BASE}/search/pools", params={"query": address}
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json().get("data", [])
+        if not data:
+            return None
+        # Each result has a relationship to its network; take the first hit.
+        network = (
+            data[0].get("relationships", {}).get("network", {}).get("data", {}).get("id")
+        )
+        return network
+    except Exception:
+        return None

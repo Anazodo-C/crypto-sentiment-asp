@@ -39,15 +39,18 @@ class ContrarianSignal(BaseModel):
 
 
 class SentimentRequest(BaseModel):
-    # Path A: established coin, looked up by ticker/name via CoinGecko.
+    # Single free-form input, accepts EITHER a ticker/name (established
+    # coin, resolved via CoinGecko) OR a raw contract address (new/DEX-only
+    # token, resolved via GeckoTerminal with the chain auto-detected). The
+    # frontend only ever needs to fill in this one field - see
+    # app/main.py's `_looks_like_address` for the routing heuristic.
     token: Optional[str] = Field(
-        default=None, description="Ticker or CoinGecko slug, e.g. 'SOL' or 'solana'"
+        default=None,
+        description="Ticker/name (e.g. 'SOL') OR a contract address (e.g. '0x...' or a Solana mint)",
     )
 
-    # Path B: brand-new / DEX-only token, looked up by contract address via
-    # GeckoTerminal (CoinGecko's main coin DB lags days behind for new
-    # listings; GeckoTerminal indexes new pools within minutes). Both
-    # contract_address and chain are required together for this path.
+    # Explicit path B fields, still supported directly for callers that
+    # already know the chain (skips the auto-detect network search).
     contract_address: Optional[str] = Field(
         default=None, description="Token contract address, e.g. '0x...' or a Solana mint address"
     )
@@ -55,7 +58,9 @@ class SentimentRequest(BaseModel):
         default=None,
         description=(
             "Chain the contract lives on, e.g. 'ethereum', 'bsc', 'base', "
-            "'solana', 'arbitrum', 'polygon', 'x-layer'"
+            "'solana', 'arbitrum', 'polygon', 'x-layer'. Optional - if "
+            "omitted while contract_address is set, the chain is "
+            "auto-detected."
         ),
     )
 
@@ -68,15 +73,11 @@ class SentimentRequest(BaseModel):
 
     @model_validator(mode="after")
     def _one_lookup_path(self):
-        has_token = bool(self.token)
-        has_contract = bool(self.contract_address and self.chain)
-        if not has_token and not has_contract:
+        if not self.token and not self.contract_address:
             raise ValueError(
-                "Provide either 'token' (ticker/name) or both 'contract_address' "
-                "and 'chain' (for new/DEX-only tokens)."
+                "Provide either 'token' (ticker, name, or a contract address) "
+                "or 'contract_address'."
             )
-        if self.contract_address and not self.chain:
-            raise ValueError("'chain' is required when 'contract_address' is set.")
         return self
 
 

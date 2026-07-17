@@ -42,7 +42,7 @@ FIXTURE_GT_TOKEN = {
         "attributes": {
             "name": "Brand New Coin",
             "symbol": "bnc",
-            "address": "0xNEWTOKEN0000000000000000000000000000001",
+            "address": "0x1234567890abcdef1234567890abcdef12345678",
         }
     }
 }
@@ -128,7 +128,7 @@ def run():
 
         print("\n--- new-token path (contract_address + chain) ---")
         r5 = client.post("/sentiment", json={
-            "contract_address": "0xNEWTOKEN0000000000000000000000000000001",
+            "contract_address": "0x1234567890abcdef1234567890abcdef12345678",
             "chain": "base",
         })
         assert r5.status_code == 200, r5.text
@@ -143,6 +143,33 @@ def run():
         assert body5["sub_dimensions"]["community_health"]["confidence"] == "low"
         assert body5["sub_dimensions"]["social_buzz"]["score"] > 0  # on-chain tx proxy kicked in
         assert any("new/DEX-only path" in w for w in body5["warnings"])
+
+        # 7. single free-form input that LOOKS like an address -> should
+        # auto-route to the new-token path with chain auto-detection
+        with patch("app.main.geckoterminal.detect_network", new=AsyncMock(
+            return_value="base"
+        )):
+            print("\n--- auto-detect path (bare address in 'token' field) ---")
+            r6 = client.post("/sentiment", json={
+                "token": "0x1234567890abcdef1234567890abcdef12345678",
+            })
+            assert r6.status_code == 200, r6.text
+            body6 = r6.json()
+            print("token:", body6["token_name"], body6["token_ticker"])
+            assert body6["token_name"] == "Brand New Coin"
+            assert any("auto-detected as 'base'" in w for w in body6["warnings"])
+            print("chain auto-detection OK")
+
+        # 8. address given but no pool found anywhere -> clear 404, not a crash
+        with patch("app.main.geckoterminal.detect_network", new=AsyncMock(
+            return_value=None
+        )):
+            print("\n--- auto-detect path: undetectable chain ---")
+            r7 = client.post("/sentiment", json={
+                "token": "0x1234567890abcdef1234567890abcdef12345678",
+            })
+            assert r7.status_code == 404, r7.text
+            print("correctly returned 404:", r7.json()["detail"])
 
         print("\nALL SMOKE TESTS PASSED")
 

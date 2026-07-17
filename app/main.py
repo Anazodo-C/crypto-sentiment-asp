@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -12,6 +13,18 @@ from app.schemas import FearGreedContext, SentimentRequest, SentimentResponse
 
 load_dotenv()
 logger = logging.getLogger("crypto_sentiment_asp")
+
+# EVM addresses are unambiguous (0x + 40 hex). Solana mint addresses are
+# base58, 32-44 chars - that overlaps in *length* with some tickers/names
+# but not in *alphabet* (base58 excludes 0, O, I, l, and a plain ticker like
+# "SOL" or "PEPE" is far shorter), so false positives in practice are rare.
+_EVM_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+_SOLANA_ADDRESS_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+
+
+def _looks_like_address(value: str) -> bool:
+    value = value.strip()
+    return bool(_EVM_ADDRESS_RE.match(value) or _SOLANA_ADDRESS_RE.match(value))
 
 app = FastAPI(
     title="Crypto Sentiment ASP",
@@ -117,22 +130,39 @@ async def _lookup_established_coin(req: SentimentRequest, client: httpx.AsyncCli
     return resolved["name"], resolved["symbol"], category, sub_scores
 
 
-async def _lookup_new_token(req: SentimentRequest, client: httpx.AsyncClient, warnings: list[str]):
-    """Path B: contract address + chain lookup via GeckoTerminal. Best for
+async def _lookup_new_token(
+    address: str, chain: str | None, req: SentimentRequest, client: httpx.AsyncClient, warnings: list[str]
+):
+    """Path B: contract address lookup via GeckoTerminal. Best for
     brand-new / DEX-only tokens that CoinGecko's main DB hasn't indexed yet
-    - this ASP's primary use case."""
-    network = geckoterminal.resolve_network(req.chain)
+    - this ASP's primary use case. If `chain` isn't given, it's
+    auto-detected by searching GeckoTerminal across all networks."""
+    if chain:
+        network = geckoterminal.resolve_network(chain)
+    else:
+        network = await geckoterminal.detect_network(client, address)
+        if not network:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Couldn't auto-detect a chain for contract address '{address}' - "
+                    "it may be too new to have an indexed pool yet, or you can pass "
+                    "'chain' explicitly to skip auto-detection."
+                ),
+            )
+        warnings.append(f"Chain auto-detected as '{network}' from the contract address.")
+
     try:
-        gt_token = await geckoterminal.get_token(client, network, req.contract_address)
+        gt_token = await geckoterminal.get_token(client, network, address)
     except geckoterminal.GeckoTerminalError as e:
         raise HTTPException(status_code=502, detail=f"GeckoTerminal lookup failed: {e}")
 
-    gt_pools = await geckoterminal.get_token_pools(client, network, req.contract_address)
+    gt_pools = await geckoterminal.get_token_pools(client, network, address)
     if not gt_pools:
         warnings.append("No trading pool data found - token may be extremely new, illiquid, or unindexed.")
 
     attrs = (gt_token.get("data") or {}).get("attributes") or {}
-    name = attrs.get("name") or req.contract_address
+    name = attrs.get("name") or address
     symbol = (attrs.get("symbol") or "?").upper()
 
     twitter_data = await twitter.get_recent_mentions(client, f"{name} OR {symbol}")
@@ -181,8 +211,18 @@ async def sentiment(req: SentimentRequest, request: Request):
             fng = FearGreedContext(available=False, note="Fear & Greed Index unavailable")
             warnings.append("Fear & Greed Index API unavailable at request time.")
 
-        if req.contract_address and req.chain:
-            name, symbol, category, sub_scores = await _lookup_new_token(req, client, warnings)
+        if req.contract_address:
+            # Caller already knows it's a contract address (chain optional -
+            # auto-detected below if not given).
+            name, symbol, category, sub_scores = await _lookup_new_token(
+                req.contract_address, req.chain, req, client, warnings
+            )
+        elif req.token and _looks_like_address(req.token):
+            # Single free-form input that happens to look like an address -
+            # this is the path the frontend's one input box uses.
+            name, symbol, category, sub_scores = await _lookup_new_token(
+                req.token, req.chain, req, client, warnings
+            )
         else:
             name, symbol, category, sub_scores = await _lookup_established_coin(req, client, warnings)
 
