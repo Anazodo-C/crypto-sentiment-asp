@@ -29,7 +29,7 @@ def is_enabled() -> bool:
 
 
 def payment_required_response() -> JSONResponse:
-    price = os.getenv("X402_PRICE_USDC", "0.05")
+    price = os.getenv("X402_PRICE_USDC", "0.5")
     address = os.getenv("X402_RECEIVING_ADDRESS", "UNSET")
     network = os.getenv("X402_NETWORK", "x-layer")
     return JSONResponse(

@@ -22,6 +22,22 @@ app = FastAPI(
 )
 
 
+@app.get("/")
+async def root():
+    return {
+        "name": "Crypto Sentiment ASP",
+        "description": (
+            "A2MCP sentiment analysis service for OKX.AI. POST a token ticker "
+            "or name to /sentiment to get a 0-100 Sentiment Score."
+        ),
+        "endpoints": {
+            "GET /health": "liveness check",
+            "POST /sentiment": 'body: {"token": "SOL"}',
+        },
+        "docs": "/docs",
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
