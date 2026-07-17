@@ -19,7 +19,7 @@ This ships honest about its data sources rather than overclaiming:
 |---|---|---|
 | Community Health | CoinGecko `community_score` + Reddit/Telegram subscriber counts | **Direct** measurement |
 | Developer Activity | CoinGecko `developer_score` + GitHub commits/stars/forks | **Direct** measurement |
-| Social Buzz | Live X/Twitter recent-search if your API tier supports it; falls back to CoinGecko follower count + sentiment votes | Direct if X search works, else **proxy** |
+| Social Buzz | Live tweet search via twitterapi.io if a valid key is set; falls back to CoinGecko follower count + sentiment votes | Direct if the API call succeeds, else **proxy** |
 | News Tone | CoinGecko `public_interest_score` + sentiment votes + price momentum | **Proxy** (no live headline source wired up) |
 | Narrative Momentum | CoinGecko category + market cap rank + 30d price momentum | **Proxy** (no live narrative/news source) |
 
@@ -29,10 +29,14 @@ top-level `warnings` array when something degraded. Don't strip these out
 for the demo — judges penalize overclaiming more than a scoped-down but
 honest system.
 
-**Known limitation:** your X API key is on the free tier, which
-historically only grants post access, not search. The code calls the
-search endpoint anyway and gracefully falls back if it's rejected — check
-the `warnings` field in a live response to see which path it took.
+**Social data source:** uses [twitterapi.io](https://twitterapi.io) (a
+third-party Twitter data provider, auth via a single `X-API-Key` header,
+billed per tweet returned) rather than the official Twitter API - it has
+no tiered search restrictions, so a valid key gets live mention/engagement
+data. If the key is missing or rejected, the code falls back to a
+CoinGecko-derived proxy automatically. Check the `warnings` field in a
+live response to see which path it took, and set `TWITTERAPI_IO_KEY` (not
+the old `TWITTER_BEARER_TOKEN` name) in your deploy env vars.
 
 ## Project structure
 
@@ -94,7 +98,7 @@ npm install -g vercel     # if you don't have it
 cd okx-sentiment-asp
 vercel login
 vercel                    # first deploy, follow prompts (link/create project)
-vercel env add TWITTER_BEARER_TOKEN production
+vercel env add TWITTERAPI_IO_KEY production
 vercel env add X402_RECEIVING_ADDRESS production
 vercel env add X402_PRICE_USDC production
 vercel env add X402_NETWORK production

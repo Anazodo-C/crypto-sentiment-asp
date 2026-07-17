@@ -1,68 +1,72 @@
-"""Twitter/X API v2 client with automatic fallback.
+"""twitterapi.io client (third-party Twitter data provider).
 
-The user's account is on the free tier, which historically does not
-grant access to the recent-search endpoint (post-only access). Rather
-than let the ASP fail or 401 in front of a judge, every call here is
-wrapped so a failure just marks Twitter data as unavailable and the
-scoring engine falls back to CoinGecko-derived social proxies instead.
+NOT the official api.twitter.com v2 API. twitterapi.io is a paid,
+per-call wrapper around Twitter data: https://docs.twitterapi.io - auth
+is a single `X-API-Key` header (no OAuth/Bearer scheme), and there's no
+tiered "free vs paid search access" restriction like official Twitter -
+every valid key can call advanced_search, billed per tweet returned
+(~$0.15/1k tweets, minimum $0.00015/request).
 
-If/when the tier is upgraded, this same function starts returning real
-data with no other code changes needed.
+Every call here is still wrapped so a failure just marks Twitter data as
+unavailable and the scoring engine falls back to CoinGecko-derived
+social proxies instead of breaking the endpoint.
 """
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+import time
 
 import httpx
 
-TWITTER_SEARCH_URL = "https://api.twitter.com/2/tweets/search/recent"
+SEARCH_URL = "https://api.twitterapi.io/twitter/tweet/advanced_search"
+
+
+def _get_api_key() -> str | None:
+    # Prefer the correctly-named var; fall back to the old name in case
+    # it's already set as TWITTER_BEARER_TOKEN in an existing deploy.
+    return os.getenv("TWITTERAPI_IO_KEY") or os.getenv("TWITTER_BEARER_TOKEN")
 
 
 async def get_recent_mentions(client: httpx.AsyncClient, query: str) -> dict | None:
-    token = os.getenv("TWITTER_BEARER_TOKEN")
-    if not token:
+    api_key = _get_api_key()
+    if not api_key:
         return None
 
-    start_time = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    since_ts = int(time.time()) - 24 * 3600
+    search_query = f"({query}) since_time:{since_ts}"
+
     try:
         resp = await client.get(
-            TWITTER_SEARCH_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            params={
-                "query": f"{query} -is:retweet lang:en",
-                "max_results": 100,
-                "start_time": start_time,
-                "tweet.fields": "public_metrics,created_at",
-            },
+            SEARCH_URL,
+            headers={"X-API-Key": api_key},
+            params={"query": search_query, "queryType": "Latest", "cursor": ""},
         )
         if resp.status_code == 401:
-            return {"available": False, "reason": "unauthorized - check TWITTER_BEARER_TOKEN"}
+            return {"available": False, "reason": "unauthorized - check TWITTERAPI_IO_KEY"}
         if resp.status_code == 403:
-            return {
-                "available": False,
-                "reason": "forbidden - free tier likely lacks search access",
-            }
+            return {"available": False, "reason": "forbidden - check account status/credits"}
         if resp.status_code == 429:
             return {"available": False, "reason": "rate limited"}
         if resp.status_code != 200:
-            return {"available": False, "reason": f"unexpected status {resp.status_code}"}
+            return {
+                "available": False,
+                "reason": f"unexpected status {resp.status_code}: {resp.text[:200]}",
+            }
 
         data = resp.json()
-        tweets = data.get("data", [])
-        meta = data.get("meta", {})
+        tweets = data.get("tweets", [])
         total_engagement = sum(
-            t.get("public_metrics", {}).get("like_count", 0)
-            + t.get("public_metrics", {}).get("retweet_count", 0)
+            (t.get("likeCount") or 0)
+            + (t.get("retweetCount") or 0)
+            + (t.get("quoteCount") or 0)
             for t in tweets
         )
         return {
             "available": True,
-            "mention_count": meta.get("result_count", len(tweets)),
+            "mention_count": len(tweets),
             "total_engagement": total_engagement,
             "sample_size": len(tweets),
+            "has_more": data.get("has_next_page", False),
         }
     except Exception as e:
         return {"available": False, "reason": f"error: {e}"}
