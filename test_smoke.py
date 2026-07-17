@@ -4,9 +4,54 @@ Mocks the three external clients and drives the real FastAPI endpoint +
 scoring engine end-to-end so we can verify: request/response shape, math,
 category weighting, and graceful degradation when Twitter is unavailable.
 """
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+
+# Real GeckoTerminal /search/pools response for Base USDC, captured live by
+# the user on 2026-07-17 - this is what caught detect_network() assuming a
+# relationships.network field that doesn't actually exist. Truncated to the
+# fields that matter for parsing.
+REAL_GT_SEARCH_RESPONSE = {
+    "data": [
+        {
+            "id": "base_0xd0b53d9277642d899df5c87a3966a349a798f224",
+            "type": "pool",
+            "attributes": {"name": "USDC / WETH 0.05%"},
+            "relationships": {
+                "base_token": {
+                    "data": {"id": "base_0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "type": "token"}
+                },
+                "quote_token": {
+                    "data": {"id": "base_0x4200000000000000000000000000000000000006", "type": "token"}
+                },
+            },
+        }
+    ]
+}
+
+
+def test_detect_network_against_real_response():
+    """Regression test for the detect_network parsing bug - runs the real
+    parsing function against a real captured API response, no mocking of
+    our own code, only the HTTP layer."""
+    from app import geckoterminal
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return REAL_GT_SEARCH_RESPONSE
+
+    class FakeClient:
+        async def get(self, url, params=None):
+            return FakeResponse()
+
+    network = asyncio.run(
+        geckoterminal.detect_network(FakeClient(), "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+    )
+    assert network == "base", f"expected 'base', got {network!r}"
+    print("detect_network() correctly parsed 'base' from real API response")
 
 FIXTURE_COIN = {
     "id": "solana",
@@ -170,6 +215,9 @@ def run():
             })
             assert r7.status_code == 404, r7.text
             print("correctly returned 404:", r7.json()["detail"])
+
+        print()
+        test_detect_network_against_real_response()
 
         print("\nALL SMOKE TESTS PASSED")
 

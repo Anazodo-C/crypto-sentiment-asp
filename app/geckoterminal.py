@@ -8,12 +8,19 @@ within minutes of launch. GeckoTerminal is CoinGecko's own DEX-tracking
 product and indexes new pools/tokens far faster, keyed by chain + contract
 address instead of a curated coin id.
 
-NOTE: not live-tested in the build sandbox (outbound network there is
-allowlisted and blocked api.geckoterminal.com, same as it blocked
-CoinGecko/alternative.me earlier in this build). This is a long-standing
-stable public API; verify against the real endpoint once deployed.
+Verified live against real GeckoTerminal responses on 2026-07-17 (this
+sandbox's own network is allowlisted and blocked api.geckoterminal.com,
+so the user ran the curl calls directly and pasted back the output).
+get_token / get_token_pools matched the originally-assumed shape exactly.
+detect_network did NOT: pool/token relationship objects don't carry a
+`network` field at all - the network is embedded as a prefix on the id
+itself, e.g. `"base_0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"` -> network
+`base`. Fixed below to parse that instead of a nonexistent relationships
+field.
 """
 from __future__ import annotations
+
+import re
 
 import httpx
 
@@ -87,10 +94,29 @@ async def get_token_pools(client: httpx.AsyncClient, network: str, address: str)
         return []
 
 
+# GeckoTerminal ids are formatted "{network}_{address}", e.g.
+# "base_0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" or
+# "eth_0xdac17f958d2ee523a2206206994597c13d831ec". The network segment can
+# itself contain underscores (e.g. "polygon_pos"), so this greedily captures
+# everything before the final "_<address>" rather than splitting on the
+# first underscore.
+_ID_SUFFIX_RE = re.compile(
+    r"^(?P<network>.+)_(?P<address>0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$"
+)
+
+
+def _parse_network_from_id(gt_id: str) -> tuple[str, str] | None:
+    m = _ID_SUFFIX_RE.match(gt_id or "")
+    if not m:
+        return None
+    return m.group("network"), m.group("address")
+
+
 async def detect_network(client: httpx.AsyncClient, address: str) -> str | None:
     """Auto-detect which chain a contract address lives on, so the caller
     doesn't have to specify `chain` up front - searches GeckoTerminal's
-    cross-network pool search and reads the network off the first match.
+    cross-network pool search and reads the network off of whichever
+    pool's base/quote token id actually matches the input address.
 
     Returns the GeckoTerminal network slug, or None if no pool anywhere
     matches this address (e.g. genuinely not found, or too new/no pool yet).
@@ -104,10 +130,20 @@ async def detect_network(client: httpx.AsyncClient, address: str) -> str | None:
         data = resp.json().get("data", [])
         if not data:
             return None
-        # Each result has a relationship to its network; take the first hit.
-        network = (
-            data[0].get("relationships", {}).get("network", {}).get("data", {}).get("id")
-        )
-        return network
+
+        target = address.strip().lower()
+        for pool in data:
+            rels = pool.get("relationships", {}) or {}
+            for token_key in ("base_token", "quote_token"):
+                token_id = (rels.get(token_key) or {}).get("data", {}).get("id")
+                parsed = _parse_network_from_id(token_id) if token_id else None
+                if parsed and parsed[1].lower() == target:
+                    return parsed[0]
+
+        # Didn't find an exact address match in any relationship (unexpected
+        # shape, or the match was on something not covered above) - fall
+        # back to the first result's own network as a best-effort guess.
+        parsed = _parse_network_from_id(data[0].get("id", ""))
+        return parsed[0] if parsed else None
     except Exception:
         return None
