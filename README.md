@@ -96,7 +96,7 @@ app/
   feargreed.py     Fear & Greed Index client (free, keyless)
   twitter.py       X API client with fallback
   scoring.py       The 5-dimension scoring engine (the actual IP)
-  x402.py          Payment gate - STUB, see below
+  x402.py          Payment gate - see x402 section below
 api/index.py       Vercel ASGI entrypoint (re-exports app/main.py's app)
 vercel.json        Vercel build/routing config
 test_smoke.py      End-to-end test using fixture data (mocks all 3 external APIs)
@@ -181,43 +181,62 @@ Other Python hosts (Render, Fly.io, Railway) also work if you'd rather
 run `uvicorn app.main:app` directly instead of the Vercel adapter —
 just ignore `vercel.json`/`api/` in that case.
 
-## x402 payment integration — attempted, currently blocked, shipping free
+## x402 payment integration
 
-`app/x402.py` was written to wrap `POST /sentiment` with what OKX's docs
-describe as their official seller SDK (`okxweb3-app-x402`'s
-`PaymentMiddlewareASGI`, with `OKXAuthConfig`/`OKXFacilitatorClient` for
-verify+settle against OKX's facilitator on X Layer).
+`app/x402.py` wraps `POST /sentiment` with OKX's official seller SDK
+(`okxweb3-app-x402`'s `PaymentMiddlewareASGI`, with
+`OKXAuthConfig`/`OKXFacilitatorClient` for verify+settle against OKX's
+facilitator on X Layer). This is now believed working — see the fix
+below — but hasn't been exercised against a real Buyer payment yet, so
+treat "enabled" as "should work per spec" until you've confirmed a real
+paid call settles.
 
-**This does not currently work, and the reason is worth recording.**
-`pip install okxweb3-app-x402` resolves to a PyPI package whose metadata
-lists **Coinbase** as author and `github.com/coinbase/x402` as its
-homepage — i.e. it's the generic, network-agnostic x402 protocol library,
-not an OKX-specific facilitator wrapper. The `OKXAuthConfig` /
-`OKXFacilitatorClient` / `OKXFacilitatorConfig` classes described in
-OKX's own SDK reference docs do not exist in this package
-(`ImportError: cannot import name 'OKXAuthConfig' from 'x402.http'`).
-Either OKX distributes their real facilitator SDK a different way (a
-private index, something unlocked after dev-portal signup, a differently
--named package), or the docs describe something not yet matched by what's
-publicly installable. This was not resolved before the deadline.
+**Earlier failure, and the actual root cause.** This previously shipped
+disabled after `ImportError: cannot import name 'OKXAuthConfig' from
+'x402.http'`, which we misdiagnosed as `okxweb3-app-x402` on PyPI being
+an unrelated, generic Coinbase package with no OKX-specific classes.
+Re-reading OKX's real Python SDK reference
+(`web3.okx.com/onchainos/dev-docs/payments/sdk-python`) shows
+`OKXAuthConfig` / `OKXFacilitatorClient` / `OKXFacilitatorConfig` are
+real, current, documented exports — the code in `app/x402.py` matches
+that spec exactly and was correct all along.
 
-**Current behavior**: `x402.build_middleware()` is wrapped in a try/except
-in `app/main.py` specifically so this kind of failure can't take down the
-whole service — if it throws, the app logs it, exposes the real exception
-via `GET /health`'s `x402_error` field (faster to debug than digging
-through Vercel's log tab), and **falls back to serving `/sentiment` for
-free** rather than 500ing every route. Practically: leave
-`X402_ENABLED=false` in your deploy env vars and register the ASP as
-**free** — free A2MCP services are explicitly supported per the OKX.AI
-tutorial, and this can be revisited and flipped on later without
-re-registering from scratch.
+The real bug was in `requirements.txt`: alongside `okxweb3-app-x402` we
+had separately added `x402[evm]` to fix an unrelated `ImportError: EVM
+mechanism requires ethereum packages` error. That pulled in **Coinbase's
+own, separately-published `x402` PyPI package**, which installs its own
+`x402.http` module without the OKX-specific classes — shadowing the copy
+`okxweb3-app-x402` vendors internally at `_vendor/x402/...` (visible in
+the original traceback). Fixed by requesting the `evm` extra **from
+okxweb3-app-x402 itself** (`okxweb3-app-x402[evm,fastapi]==0.1.1` — it
+ships its own `evm`/`fastapi` extras per its PyPI "Provides-Extra" list)
+instead of installing a second, conflicting top-level `x402` package.
 
-**If you pick this back up later**: don't restart from OKX's Python SDK
-reference doc as ground truth — it didn't match the real package. Instead
-start from whatever the OKX Developer Portal actually hands you after
-signup (real package name, real code samples), or from
-`github.com/coinbase/x402`'s own Python folder if a generic (non-OKX
--specific) facilitator turns out to be sufficient.
+**To actually enable it**, set these in Vercel env vars:
+
+```
+X402_ENABLED=true
+OKX_API_KEY=...        # from https://web3.okx.com/onchainos/dev-portal
+OKX_SECRET_KEY=...
+OKX_PASSPHRASE=...
+X402_RECEIVING_ADDRESS=0x...   # your Agentic Wallet EVM address
+X402_PRICE_USDC=0.5
+```
+
+Redeploy, then check `GET /health` — `x402_status` should read
+`"enabled"`, not `"failed_fallback_free"`. If it's the latter,
+`x402_error` has the real exception. Then confirm `POST /sentiment`
+without a payment header returns `402` with a `PAYMENT-REQUIRED` header,
+and — the part that actually proves it "goes through" — run a real paid
+call from a Buyer (Agentic Wallet) and confirm you get `200` back with a
+`PAYMENT-RESPONSE` settlement receipt, not just that the 402 challenge
+looks right.
+
+**Note on Python version**: `okxweb3-app-x402` requires Python >=3.11
+and could not be pip-installed or exercised in the build sandbox (Python
+3.10) — this fix is based on re-reading the official docs, not a local
+test run. Vercel's default Python runtime is 3.12, so it should install
+there without issue, but the actual paid flow needs verifying live.
 
 ## Registering as an ASP on OKX.AI
 
@@ -245,7 +264,8 @@ is deployed and reachable:
 - Token resolution (`coingecko.resolve_coin_id`) does simple ticker
   matching; ambiguous tickers (e.g. multiple coins named "SOL"-adjacent)
   could resolve to the wrong coin. Fine for a demo, worth hardening later.
-- x402 verification is a stub (see above) - the most important thing to
-  finish next if this needs to be a real paid listing.
+- x402 payment gate should now work per OKX's documented SDK spec (see
+  above) but hasn't been confirmed against a real settled payment yet -
+  do that before relying on it for a paid listing.
 - CoinGecko free tier has rate limits; under real load you'd want a
   CoinGecko API key or caching layer.

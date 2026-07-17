@@ -7,11 +7,24 @@ This wraps the /sentiment route with OKX's PaymentMiddlewareASGI, which:
   - on success, lets the request through to the real handler and attaches
     a PAYMENT-RESPONSE header with the settlement receipt
 
-NOT LIVE-TESTED: `okxweb3-app-x402` requires Python >=3.11, and the sandbox
-this was built in only has Python 3.10 available, so the package could not
-be installed or exercised locally. Vercel's default Python runtime is 3.12,
-so it should install fine there - but you need to verify the actual paid
-flow works end-to-end after deploying (see README).
+HISTORY: this was previously shipped disabled after an
+"ImportError: cannot import name 'OKXAuthConfig' from 'x402.http'" that we
+misdiagnosed as `okxweb3-app-x402` on PyPI actually being a different,
+unrelated Coinbase package with no OKX-specific classes. Re-reading OKX's
+actual Python SDK reference (web3.okx.com/onchainos/dev-docs/payments/
+sdk-python) confirms OKXAuthConfig/OKXFacilitatorClient/OKXFacilitatorConfig
+are real, current, documented exports - this code below matches that spec
+exactly. The real bug was in requirements.txt: a separately-added
+`x402[evm]` dependency pulled in Coinbase's own generic `x402` package,
+which shadowed the OKX-specific `x402` module vendored inside
+okxweb3-app-x402 itself. Fixed by requesting the `evm` extra from
+okxweb3-app-x402 directly instead (see requirements.txt).
+
+NOT LIVE-TESTED FROM THIS SANDBOX: `okxweb3-app-x402` requires Python
+>=3.11, and the sandbox this was built in only has Python 3.10, so the
+package cannot be pip-installed or exercised locally here. Vercel's default
+Python runtime is 3.12, so it installs fine there - verify the actual paid
+flow end-to-end after deploying (see README's testing checklist).
 
 Required env vars when X402_ENABLED=true:
   OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE  - from
