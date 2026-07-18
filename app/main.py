@@ -10,6 +10,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import ValidationError
 
 from app import coingecko, feargreed, geckoterminal, scoring, twitter, x402
 from app.frontend import INDEX_HTML
@@ -282,6 +283,34 @@ async def _lookup_new_token(
 async def sentiment(req: SentimentRequest, request: Request):
     # Payment gating (if enabled) already happened in PaymentMiddlewareASGI
     # before this handler runs - an unpaid/unverified request never gets here.
+    return await _sentiment_impl(req)
+
+
+@app.get("/sentiment", response_model=SentimentResponse)
+async def sentiment_get(
+    token: str | None = None,
+    contract_address: str | None = None,
+    chain: str | None = None,
+    category_hint: str | None = None,
+):
+    # GET alias for the same resource, query-param driven. Exists because
+    # some 402/x402 validators (and the OKX A2MCP prober per its docs)
+    # default to probing with GET - without this, a POST-only route 405s
+    # on that probe instead of returning the payment challenge, which
+    # reads as "no valid 402" and fails x402 standard validation even
+    # though the real POST route is fully compliant. Registered as its own
+    # "GET /sentiment" entry in app/x402.py's payment middleware routes so
+    # it's gated identically to POST.
+    try:
+        req = SentimentRequest(
+            token=token, contract_address=contract_address, chain=chain, category_hint=category_hint
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+    return await _sentiment_impl(req)
+
+
+async def _sentiment_impl(req: SentimentRequest):
     warnings: list[str] = []
 
     # Per-call timeout kept tight: OKX's platform tester enforces its own

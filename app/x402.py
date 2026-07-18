@@ -92,17 +92,31 @@ def build_middleware():
     price = os.getenv("X402_PRICE_USDC", "0.1")
     pay_to = os.environ["X402_RECEIVING_ADDRESS"]
 
+    payment_option = PaymentOption(
+        scheme="exact",
+        pay_to=pay_to,
+        price=f"${price}",
+        network="eip155:196",
+    )
+
+    # Both POST and GET are gated identically. POST /sentiment is the real
+    # API contract (see app/main.py); GET /sentiment is a query-param alias
+    # that exists only so a validator/prober that defaults to GET (several
+    # x402 clients do, including this repo's own reviewer per OKX's A2MCP
+    # docs) sees a spec-compliant 402 instead of a 405 Method Not Allowed -
+    # a 405 was very likely why prior review submissions were rejected as
+    # "x402 standard misalignment" even though the POST route was correct.
     routes = {
         "POST /sentiment": RouteConfig(
-            accepts=PaymentOption(
-                scheme="exact",
-                pay_to=pay_to,
-                price=f"${price}",
-                network="eip155:196",
-            ),
+            accepts=payment_option,
             resource="/sentiment",
             description="Crypto sentiment analysis (per-call)",
-        )
+        ),
+        "GET /sentiment": RouteConfig(
+            accepts=payment_option,
+            resource="/sentiment",
+            description="Crypto sentiment analysis (per-call)",
+        ),
     }
 
     return PaymentMiddlewareASGI, {"routes": routes, "server": server}
