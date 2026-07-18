@@ -89,6 +89,18 @@ async def root():
     return INDEX_HTML
 
 
+@app.post("/", response_model=SentimentResponse)
+async def root_post(req: SentimentRequest):
+    # Alias of POST /sentiment at the bare registered domain root. Exists
+    # because OKX's ASP reviewer probes the literal registered endpoint URL
+    # for x402 compliance, and - confirmed live via curl - that probe hits
+    # https://crypto-sentiment-asp.vercel.app/ directly rather than
+    # .../sentiment, so without this alias it 405s (no POST / handler
+    # existed at all) instead of returning the 402 challenge. Gated
+    # identically to POST /sentiment in app/x402.py's routes.
+    return await _sentiment_impl(req)
+
+
 @app.get("/sentimento.png")
 async def logo():
     """Serves the logo from /public for callers that want a real URL

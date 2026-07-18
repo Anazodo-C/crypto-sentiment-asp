@@ -145,13 +145,15 @@ def build_middleware():
         network="eip155:196",
     )
 
-    # Both POST and GET are gated identically. POST /sentiment is the real
-    # API contract (see app/main.py); GET /sentiment is a query-param alias
-    # that exists only so a validator/prober that defaults to GET (several
-    # x402 clients do, including this repo's own reviewer per OKX's A2MCP
-    # docs) sees a spec-compliant 402 instead of a 405 Method Not Allowed -
-    # a 405 was very likely why prior review submissions were rejected as
-    # "x402 standard misalignment" even though the POST route was correct.
+    # POST /sentiment is the real API contract (see app/main.py). GET
+    # /sentiment and POST / are aliases gated identically, only so a
+    # validator/prober that hits either a default GET (several x402
+    # clients do this) or the bare registered domain root instead of the
+    # specific /sentiment path (confirmed live: OKX's reviewer does exactly
+    # this) sees a spec-compliant 402 instead of a 405 Method Not Allowed -
+    # a 405 on either was very likely why prior review submissions were
+    # rejected as "x402 standard misalignment" even though POST /sentiment
+    # itself was correct.
     routes = {
         "POST /sentiment": RouteConfig(
             accepts=payment_option,
@@ -159,6 +161,11 @@ def build_middleware():
             description="Crypto sentiment analysis (per-call)",
         ),
         "GET /sentiment": RouteConfig(
+            accepts=payment_option,
+            resource="/sentiment",
+            description="Crypto sentiment analysis (per-call)",
+        ),
+        "POST /": RouteConfig(
             accepts=payment_option,
             resource="/sentiment",
             description="Crypto sentiment analysis (per-call)",
