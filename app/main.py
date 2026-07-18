@@ -56,7 +56,14 @@ try:
     _x402_mw = x402.build_middleware()
     if _x402_mw:
         _middleware_class, _mw_kwargs = _x402_mw
+        # Registered AFTER the OKX middleware so it wraps OUTSIDE it -
+        # Starlette's add_middleware() makes the most-recently-added
+        # middleware outermost (verified empirically: the reverse
+        # assumption was tried first and silently failed to see OKX's
+        # response at all). It needs to be outside to see and rewrite the
+        # 402 response OKX's inner middleware produces.
         app.add_middleware(_middleware_class, **_mw_kwargs)
+        app.add_middleware(x402.PaymentRequiredBodyMiddleware)
         x402_status = "enabled"
 except Exception as e:
     # Surface the real error via the API itself (repr + type), not just

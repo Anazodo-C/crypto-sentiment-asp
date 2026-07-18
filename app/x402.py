@@ -39,9 +39,55 @@ from __future__ import annotations
 
 import os
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
 
 def is_enabled() -> bool:
     return os.getenv("X402_ENABLED", "false").lower() == "true"
+
+
+class PaymentRequiredBodyMiddleware(BaseHTTPMiddleware):
+    """Rewrites OKX's 402 response body into a human-readable message.
+
+    OKX's PaymentMiddlewareASGI puts the actual x402 challenge (network,
+    amount, recipient) in the base64-encoded PAYMENT-REQUIRED header and
+    leaves the JSON body as `{}` - correct per the x402 spec, but opaque to
+    anyone reading just the body (a human running plain `curl`, or a
+    validator that checks the body text for "Payment Required" rather than
+    only decoding the header). This adds a plain-language body alongside
+    the untouched header, so both are readable.
+
+    Must be registered with app.add_middleware() AFTER the OKX payment
+    middleware (see app/main.py) so it wraps OUTSIDE it in the ASGI stack -
+    Starlette makes the most-recently-added middleware outermost, so it
+    needs to be added last to see the final response OKX's inner
+    middleware produced.
+    """
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if response.status_code != 402:
+            return response
+        # Drop content-length/content-type from the original response so
+        # JSONResponse recomputes them for the new (longer) body - keeping
+        # the stale content-length would truncate the response on the wire.
+        headers = {
+            k: v for k, v in response.headers.items() if k.lower() not in ("content-length", "content-type")
+        }
+        return JSONResponse(
+            status_code=402,
+            content={
+                "error": "Payment Required",
+                "message": (
+                    "HTTP 402 Payment Required - this endpoint is pay-per-call via "
+                    "the x402 standard. Decode the PAYMENT-REQUIRED response header "
+                    "(base64 JSON) for the payment challenge (network, amount, "
+                    "recipient), then retry with a PAYMENT-SIGNATURE header attached."
+                ),
+            },
+            headers=headers,
+        )
 
 
 def build_middleware():
