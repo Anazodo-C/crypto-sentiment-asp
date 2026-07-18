@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -283,28 +284,34 @@ async def sentiment(req: SentimentRequest, request: Request):
     # before this handler runs - an unpaid/unverified request never gets here.
     warnings: list[str] = []
 
-    async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
-        fng_data = await feargreed.get_fear_greed(client)
+    # Per-call timeout kept tight: OKX's platform tester enforces its own
+    # response deadline, and the token lookup below makes 2-3 *sequential*
+    # external calls (each depends on the previous one's result, so they
+    # can't be parallelized) - at the old 15s/call timeout, one slow/hung
+    # dependency could burn the entire budget and look like "no response"
+    # from the outside, exactly the failure mode from the last review.
+    async with httpx.AsyncClient(timeout=6.0, trust_env=False) as client:
+        if req.contract_address:
+            # Caller already knows it's a contract address (chain optional -
+            # auto-detected below if not given).
+            lookup = _lookup_new_token(req.contract_address, req.chain, req, client, warnings)
+        elif req.token and _looks_like_address(req.token):
+            # Single free-form input that happens to look like an address -
+            # this is the path the frontend's one input box uses.
+            lookup = _lookup_new_token(req.token, req.chain, req, client, warnings)
+        else:
+            lookup = _lookup_established_coin(req, client, warnings)
+
+        # Fear & Greed has no dependency on the token lookup, so it runs
+        # concurrently with it instead of adding its latency in front.
+        (name, symbol, category, sub_scores), fng_data = await asyncio.gather(
+            lookup, feargreed.get_fear_greed(client)
+        )
         if fng_data:
             fng = FearGreedContext(**fng_data, available=True)
         else:
             fng = FearGreedContext(available=False, note="Fear & Greed Index unavailable")
             warnings.append("Fear & Greed Index API unavailable at request time.")
-
-        if req.contract_address:
-            # Caller already knows it's a contract address (chain optional -
-            # auto-detected below if not given).
-            name, symbol, category, sub_scores = await _lookup_new_token(
-                req.contract_address, req.chain, req, client, warnings
-            )
-        elif req.token and _looks_like_address(req.token):
-            # Single free-form input that happens to look like an address -
-            # this is the path the frontend's one input box uses.
-            name, symbol, category, sub_scores = await _lookup_new_token(
-                req.token, req.chain, req, client, warnings
-            )
-        else:
-            name, symbol, category, sub_scores = await _lookup_established_coin(req, client, warnings)
 
     # Composite score is computed ONLY from dimensions that returned a
     # real, non-None score. A dimension with no real data (score=None,
