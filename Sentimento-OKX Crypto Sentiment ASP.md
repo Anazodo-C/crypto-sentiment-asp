@@ -4,7 +4,11 @@ Session resumption notes. Agent identity: **#6370** ("Sentimento", ASP role) on 
 
 ## Status as of this session
 
-Resubmitted for review via `onchainos agent activate --agent-id 6370 --preferred-language en-US` — response matched the "submitted for review" shape (`submitApproval.approvalStatus: 2, success: true`). Awaiting OKX's review outcome (up to 24h per their process).
+Resubmitted for review via `onchainos agent activate --agent-id 6370 --preferred-language en-US` — response matched the "submitted for review" shape (`submitApproval.approvalStatus: 2, success: true`).
+
+As of the last check (**2026-07-18 22:32 UTC**, ~6.5h after it first showed "under review" at 16:01 UTC): still `approvalDisplayStatus: 2` — **"Listing under review"**, `approvalRemark: "AI quality review suggested pass"`. `updatedAt` keeps advancing between checks (record is actively being touched, not stalled). OKX's stated SLA is "up to 24 hours" — **do not resubmit yet**, we're well inside that window. `activate` is a no-op while already under review, so resubmitting now wouldn't do anything useful and could look like noise on OKX's side. Worth reconsidering only if it's still stuck past ~24h from 16:01 UTC on 2026-07-18 (i.e. past ~16:01 UTC on 2026-07-19).
+
+To re-check status: `onchainos agent get-agents --agent-ids 6370` (read `approvalLabel` / `approvalRemark`). Needs `export PATH=~/.npm-global/bin:$PATH` first if `okx-a2a` isn't already on PATH in the shell.
 
 ## What the previous rejection said
 
