@@ -121,6 +121,22 @@ INDEX_HTML = """<!DOCTYPE html>
     background: #2a1418; border: 1px solid #5c2530; border-radius: 10px;
     color: var(--bad); font-size: 0.92rem;
   }
+  #pay-box {
+    display: none;
+    max-width: 480px; margin: 16px auto; padding: 20px 24px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    text-align: center;
+  }
+  #pay-box .pay-amount { font-size: 1.6rem; font-weight: 800; color: var(--accent); margin-bottom: 4px; }
+  #pay-box .pay-detail { color: var(--muted); font-size: 0.82rem; margin-bottom: 16px; line-height: 1.5; }
+  #pay-box button {
+    background: var(--accent); color: #000; border: none; padding: 12px 24px;
+    border-radius: 10px; font-weight: 700; font-size: 1rem; cursor: pointer; width: 100%;
+  }
+  #pay-box button:disabled { opacity: 0.6; cursor: default; }
+  #pay-box .pay-cancel {
+    background: none; color: var(--muted); margin-top: 10px; font-weight: 500; font-size: 0.85rem;
+  }
 
   #report { display: none; }
 
@@ -251,6 +267,12 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div id="status"></div>
   <div id="error-box"></div>
+  <div id="pay-box">
+    <div class="pay-amount" id="pay-amount"></div>
+    <div class="pay-detail" id="pay-detail"></div>
+    <button id="pay-btn">Pay with wallet</button>
+    <button class="pay-cancel" id="pay-cancel">Cancel</button>
+  </div>
 
   <div id="report">
     <div class="verdict-card">
@@ -298,6 +320,7 @@ INDEX_HTML = """<!DOCTYPE html>
       <p><b>Established coins</b> (e.g. <code>SOL</code>, <code>BTC</code>) are resolved via CoinGecko's main coin database.</p>
       <p><b>New / DEX-only tokens</b> — paste a contract address (<code>0x...</code> or a Solana mint) and the chain is auto-detected via GeckoTerminal, which indexes new pools within minutes of launch instead of the hours-to-days CoinGecko's curated listing process takes. This is Sentimento's primary use case.</p>
       <p>Every sub-dimension carries a <code>confidence</code> level and a <code>basis</code> string explaining exactly what data produced it — proxy-derived and Insufficient Data scores are labeled as such rather than presented as precise measurements.</p>
+      <p>Each call costs a small amount, paid via the <b>x402</b> payment standard on X Layer. If you're not already logged in, you'll be asked to connect a wallet (OKX Wallet or any browser wallet) and sign a payment authorization — no gas fee, no separate transaction to broadcast yourself.</p>
       <p>This is an A2MCP endpoint for OKX.AI &middot; <code>POST /sentiment</code> &middot; <a href="/docs">full API docs</a></p>
     </div>
   </details>
@@ -345,6 +368,204 @@ function assessmentColor(a) {
   return 'var(--warn)';
 }
 
+// ---- x402 payment (client/buyer side, EVM "exact" scheme) -----------------
+//
+// /sentiment is pay-per-call. An unpaid POST comes back 402 with a
+// PAYMENT-REQUIRED header (base64 JSON challenge, x402 v2). This signs an
+// EIP-3009 TransferWithAuthorization with the visitor's own injected wallet
+// (OKX Wallet / MetaMask / any window.ethereum provider) and retries the
+// request with the signed authorization attached as PAYMENT-SIGNATURE.
+//
+// Safety property worth knowing: x402 is verify-then-settle. The server
+// calls the facilitator's /verify before /settle, so a malformed or invalid
+// signature is rejected with an error and no funds move - real money only
+// moves after a structurally correct, validly-signed authorization passes
+// verification. This wire format is inferred from OKX's seller SDK docs
+// (header name PAYMENT-SIGNATURE) plus the public x402 "exact" EVM scheme
+// spec (github.com/x402-foundation/x402/specs/schemes/exact) - it has not
+// been confirmed against an OKX-published browser example, only against a
+// real CLI-driven payment to this same endpoint. Verify a real payment
+// click-through here before relying on it.
+
+const payBox = document.getElementById('pay-box');
+const payAmountEl = document.getElementById('pay-amount');
+const payDetailEl = document.getElementById('pay-detail');
+const payBtn = document.getElementById('pay-btn');
+const payCancelBtn = document.getElementById('pay-cancel');
+
+let pendingToken = null;
+let pendingChallenge = null;
+
+function bytesToHex(bytes) {
+  return '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function randomNonce32() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return bytesToHex(bytes);
+}
+
+function decodePaymentRequired(headerValue) {
+  return JSON.parse(atob(headerValue));
+}
+
+function readSellerError(body, status) {
+  if (body && typeof body === 'object') {
+    const msg = body.reason || body.detail || body.message || body.msg || body.error || body.title;
+    if (msg) return typeof msg === 'string' ? msg : JSON.stringify(msg);
+  }
+  return 'Request failed with status ' + status;
+}
+
+async function connectWallet() {
+  if (!window.ethereum) {
+    throw new Error('No wallet found - install OKX Wallet or another browser wallet extension to pay for this call.');
+  }
+  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  if (!accounts || !accounts.length) throw new Error('Wallet connection was rejected.');
+  return accounts[0];
+}
+
+async function ensureChain(chainIdDecimal) {
+  const chainIdHex = '0x' + chainIdDecimal.toString(16);
+  try {
+    await window.ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: chainIdHex }],
+    });
+  } catch (switchErr) {
+    if (switchErr && switchErr.code === 4902) {
+      throw new Error(
+        "Your wallet doesn't have X Layer (chain " + chainIdDecimal + ') added yet. ' +
+        'Add it in your wallet (OKX Wallet supports X Layer natively) and try again.'
+      );
+    }
+    throw switchErr;
+  }
+}
+
+async function signAndPay(account, challenge) {
+  const accept = challenge.accepts.find(a => a.scheme === 'exact');
+  if (!accept) throw new Error('Server did not offer a supported payment scheme.');
+
+  const chainIdDecimal = parseInt(accept.network.split(':')[1], 10);
+  await ensureChain(chainIdDecimal);
+
+  const validBefore = String(Math.floor(Date.now() / 1000) + (accept.maxTimeoutSeconds || 300));
+  const authorization = {
+    from: account,
+    to: accept.payTo,
+    value: accept.amount,
+    validAfter: '0',
+    validBefore,
+    nonce: randomNonce32(),
+  };
+
+  const typedData = {
+    types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+      ],
+      TransferWithAuthorization: [
+        { name: 'from', type: 'address' },
+        { name: 'to', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'validAfter', type: 'uint256' },
+        { name: 'validBefore', type: 'uint256' },
+        { name: 'nonce', type: 'bytes32' },
+      ],
+    },
+    primaryType: 'TransferWithAuthorization',
+    domain: {
+      name: accept.extra.name,
+      version: accept.extra.version,
+      chainId: chainIdDecimal,
+      verifyingContract: accept.asset,
+    },
+    message: authorization,
+  };
+
+  const signature = await window.ethereum.request({
+    method: 'eth_signTypedData_v4',
+    params: [account, JSON.stringify(typedData)],
+  });
+
+  const paymentPayload = {
+    x402Version: challenge.x402Version,
+    scheme: 'exact',
+    network: accept.network,
+    payload: { signature, authorization },
+  };
+  return btoa(JSON.stringify(paymentPayload));
+}
+
+async function runSentimentRequest(token, paymentHeader) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (paymentHeader) headers['PAYMENT-SIGNATURE'] = paymentHeader;
+  const resp = await fetch('/sentiment', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ token }),
+  });
+  let data = {};
+  try { data = await resp.json(); } catch (_) { /* non-JSON error body */ }
+  return { resp, data };
+}
+
+function showPayBox(challenge) {
+  const accept = challenge.accepts.find(a => a.scheme === 'exact') || challenge.accepts[0];
+  // 6 decimals matches USD₮0 (the configured price token, confirmed via a
+  // live CLI-driven payment) - the 402 challenge itself doesn't carry a
+  // decimals field, so this isn't derived from the payload.
+  const amountHuman = (Number(accept.amount) / Math.pow(10, 6)).toString();
+  payAmountEl.textContent = amountHuman + ' ' + (accept.extra && accept.extra.name || 'tokens');
+  payDetailEl.textContent =
+    'Sentimento charges per call via the x402 payment standard. Connect your wallet to pay and get this report.';
+  payBox.style.display = 'block';
+}
+
+function hidePayBox() {
+  payBox.style.display = 'none';
+}
+
+async function payAndRetry() {
+  payBtn.disabled = true;
+  statusEl.textContent = 'Connecting wallet…';
+  try {
+    const account = await connectWallet();
+    statusEl.textContent = 'Confirm the signature request in your wallet…';
+    const paymentHeader = await signAndPay(account, pendingChallenge);
+    statusEl.textContent = 'Payment sent, fetching your report…';
+    const { resp, data } = await runSentimentRequest(pendingToken, paymentHeader);
+    if (!resp.ok) {
+      throw new Error(readSellerError(data, resp.status));
+    }
+    hidePayBox();
+    render(data);
+    statusEl.textContent = '';
+  } catch (err) {
+    statusEl.textContent = '';
+    errorBox.style.display = 'block';
+    errorBox.textContent = (err && err.message) || String(err);
+  } finally {
+    payBtn.disabled = false;
+  }
+}
+
+payBtn.addEventListener('click', payAndRetry);
+payCancelBtn.addEventListener('click', () => {
+  hidePayBox();
+  statusEl.textContent = '';
+  pendingToken = null;
+  pendingChallenge = null;
+});
+
+// ---- main search flow -------------------------------------------------
+
 async function analyze() {
   const value = input.value.trim();
   if (!value) return;
@@ -352,23 +573,30 @@ async function analyze() {
   statusEl.textContent = 'Fetching live data and scoring…';
   errorBox.style.display = 'none';
   report.style.display = 'none';
+  hidePayBox();
 
   try {
-    const resp = await fetch('/sentiment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: value }),
-    });
-    const data = await resp.json();
+    const { resp, data } = await runSentimentRequest(value, null);
+
+    if (resp.status === 402) {
+      const headerValue = resp.headers.get('payment-required');
+      if (!headerValue) throw new Error('Payment required, but no payment details were provided.');
+      pendingToken = value;
+      pendingChallenge = decodePaymentRequired(headerValue);
+      statusEl.textContent = '';
+      showPayBox(pendingChallenge);
+      return;
+    }
+
     if (!resp.ok) {
-      throw new Error(data.detail || ('Request failed with status ' + resp.status));
+      throw new Error(readSellerError(data, resp.status));
     }
     render(data);
     statusEl.textContent = '';
   } catch (err) {
     statusEl.textContent = '';
     errorBox.style.display = 'block';
-    errorBox.textContent = err.message || String(err);
+    errorBox.textContent = (err && err.message) || String(err);
   } finally {
     btn.disabled = false;
   }
