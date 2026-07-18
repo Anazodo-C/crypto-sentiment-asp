@@ -407,7 +407,13 @@ function randomNonce32() {
 }
 
 function decodePaymentRequired(headerValue) {
-  return JSON.parse(atob(headerValue));
+  // atob() returns a raw byte string (one char per byte), NOT a properly
+  // UTF-8-decoded string - passing that straight to JSON.parse mangles any
+  // multi-byte character in the payload (e.g. the token name "USD₮0"
+  // becomes "USDâ®0"). Re-decode the bytes as UTF-8 explicitly first.
+  const binaryString = atob(headerValue);
+  const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder('utf-8').decode(bytes));
 }
 
 function readSellerError(body, status) {
@@ -516,15 +522,23 @@ async function runSentimentRequest(token, paymentHeader) {
   return { resp, data };
 }
 
+const NETWORK_NAMES = {
+  'eip155:196': "OKX's X Layer",
+  'eip155:1952': "OKX's X Layer Testnet",
+};
+
 function showPayBox(challenge) {
   const accept = challenge.accepts.find(a => a.scheme === 'exact') || challenge.accepts[0];
   // 6 decimals matches USD₮0 (the configured price token, confirmed via a
   // live CLI-driven payment) - the 402 challenge itself doesn't carry a
   // decimals field, so this isn't derived from the payload.
   const amountHuman = (Number(accept.amount) / Math.pow(10, 6)).toString();
-  payAmountEl.textContent = amountHuman + ' ' + (accept.extra && accept.extra.name || 'tokens');
+  const tokenName = (accept.extra && accept.extra.name) || 'tokens';
+  const networkName = NETWORK_NAMES[accept.network] || accept.network;
+  payAmountEl.textContent = amountHuman + ' ' + tokenName;
   payDetailEl.textContent =
-    'Sentimento charges per call via the x402 payment standard. Connect your wallet to pay and get this report.';
+    'Sentimento charges per call via the x402 payment standard, paid in ' + tokenName +
+    ' on ' + networkName + '. Connect your wallet to pay and get this report.';
   payBox.style.display = 'block';
 }
 
@@ -542,6 +556,9 @@ async function payAndRetry() {
     statusEl.textContent = 'Payment sent, fetching your report…';
     const { resp, data } = await runSentimentRequest(pendingToken, paymentHeader);
     if (!resp.ok) {
+      if (resp.status === 402) {
+        throw new Error('HTTP 402 Payment Required - this endpoint is pay-per-call via the x402 standard.');
+      }
       throw new Error(readSellerError(data, resp.status));
     }
     hidePayBox();
