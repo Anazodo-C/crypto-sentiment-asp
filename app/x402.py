@@ -154,21 +154,28 @@ def build_middleware():
     # a 405 on either was very likely why prior review submissions were
     # rejected as "x402 standard misalignment" even though POST /sentiment
     # itself was correct.
+    # `resource` is deliberately omitted: the SDK falls back to the actual
+    # requested URL (x402_http_server_base.py: `route_config.resource or
+    # context.adapter.get_url()`) when it's unset, so each alias correctly
+    # reports its own path instead of all three hardcoding "/sentiment" -
+    # POST / was previously claiming resource.url="/sentiment" while the
+    # actual requested path was "/", a real spec mismatch a strict
+    # validator could reasonably flag.
     routes = {
         "POST /sentiment": RouteConfig(
             accepts=payment_option,
-            resource="/sentiment",
             description="Crypto sentiment analysis (per-call)",
+            mime_type="application/json",
         ),
         "GET /sentiment": RouteConfig(
             accepts=payment_option,
-            resource="/sentiment",
             description="Crypto sentiment analysis (per-call)",
+            mime_type="application/json",
         ),
         "POST /": RouteConfig(
             accepts=payment_option,
-            resource="/sentiment",
             description="Crypto sentiment analysis (per-call)",
+            mime_type="application/json",
         ),
     }
 
