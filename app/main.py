@@ -174,13 +174,18 @@ async def _lookup_established_coin(req: SentimentRequest, client: httpx.AsyncCli
     except coingecko.CoinGeckoError as e:
         raise HTTPException(status_code=502, detail=f"token resolution failed: {e}")
 
-    try:
-        coin = await coingecko.get_coin_data(client, resolved["id"])
-    except coingecko.CoinGeckoError as e:
-        raise HTTPException(status_code=502, detail=f"coin data fetch failed: {e}")
+    # get_coin_data and the Twitter lookup both depend only on `resolved`,
+    # not on each other - measured live (2026-07-20) this pair alone added
+    # a full extra sequential network hop to every request when chained.
+    async def _get_coin():
+        try:
+            return await coingecko.get_coin_data(client, resolved["id"])
+        except coingecko.CoinGeckoError as e:
+            raise HTTPException(status_code=502, detail=f"coin data fetch failed: {e}")
 
-    twitter_data = await twitter.get_recent_mentions(
-        client, f"{resolved['name']} OR {resolved['symbol']}"
+    coin, twitter_data = await asyncio.gather(
+        _get_coin(),
+        twitter.get_recent_mentions(client, f"{resolved['name']} OR {resolved['symbol']}"),
     )
     if not twitter_data or not twitter_data.get("available"):
         reason = (twitter_data or {}).get("reason", "no bearer token configured")
@@ -234,36 +239,44 @@ async def _lookup_new_token(
     except geckoterminal.GeckoTerminalError as e:
         raise HTTPException(status_code=502, detail=f"GeckoTerminal lookup failed: {e}")
 
-    gt_pools = await geckoterminal.get_token_pools(client, network, address)
-    if not gt_pools:
-        warnings.append("No trading pool data found - token may be extremely new, illiquid, or unindexed.")
-
     attrs = (gt_token.get("data") or {}).get("attributes") or {}
     name = attrs.get("name") or address
     symbol = (attrs.get("symbol") or "?").upper()
+    cg_id = attrs.get("coingecko_coin_id")
 
-    twitter_data = await twitter.get_recent_mentions(client, f"{name} OR {symbol}")
+    # get_token_pools, the Twitter lookup, and the CoinGecko enrich call all
+    # depend only on gt_token's attrs (network/address/name/symbol/cg_id),
+    # not on each other - previously 3 sequential hops, now one batch.
+    async def _get_enriched():
+        # Many tokens that are "new" to CoinGecko's curated database are
+        # actually already linked to a CoinGecko coin id in GeckoTerminal's
+        # own data (GeckoTerminal indexes far faster and often
+        # cross-references CoinGecko once a listing exists). When that link
+        # is present, use it to get real Community Health / Liquidity data
+        # instead of flatly marking every DEX-path lookup as Insufficient
+        # Data - only genuinely unlisted tokens should fall back to that.
+        if not cg_id:
+            return None
+        try:
+            return await coingecko.get_coin_data(client, cg_id)
+        except coingecko.CoinGeckoError:
+            return None
+
+    gt_pools, twitter_data, enriched_coin = await asyncio.gather(
+        geckoterminal.get_token_pools(client, network, address),
+        twitter.get_recent_mentions(client, f"{name} OR {symbol}"),
+        _get_enriched(),
+    )
+
+    if not gt_pools:
+        warnings.append("No trading pool data found - token may be extremely new, illiquid, or unindexed.")
+
     if not twitter_data or not twitter_data.get("available"):
         reason = (twitter_data or {}).get("reason", "no bearer token configured")
         warnings.append(
             f"Live X/Twitter data unavailable ({reason}); used on-chain transaction "
             "count as a Social Buzz proxy instead."
         )
-
-    # Many tokens that are "new" to CoinGecko's curated database are
-    # actually already linked to a CoinGecko coin id in GeckoTerminal's own
-    # data (GeckoTerminal indexes far faster and often cross-references
-    # CoinGecko once a listing exists). When that link is present, use it
-    # to get real Community Health / Liquidity data instead of flatly
-    # marking every DEX-path lookup as Insufficient Data - only genuinely
-    # unlisted tokens should fall back to that.
-    enriched_coin = None
-    cg_id = attrs.get("coingecko_coin_id")
-    if cg_id:
-        try:
-            enriched_coin = await coingecko.get_coin_data(client, cg_id)
-        except coingecko.CoinGeckoError:
-            enriched_coin = None
 
     category = req.category_hint or "other"
     insufficient_dims: list[str] = []
@@ -363,13 +376,20 @@ async def sentiment_get(
 async def _sentiment_impl(req: SentimentRequest):
     warnings: list[str] = []
 
-    # Per-call timeout kept tight: OKX's platform tester enforces its own
-    # response deadline, and the token lookup below makes 2-3 *sequential*
-    # external calls (each depends on the previous one's result, so they
-    # can't be parallelized) - at the old 15s/call timeout, one slow/hung
-    # dependency could burn the entire budget and look like "no response"
-    # from the outside, exactly the failure mode from the last review.
-    async with httpx.AsyncClient(timeout=6.0, trust_env=False) as client:
+    # Per-call timeout kept tight (3s, down from 6s): the lookup paths are
+    # now internally parallelized wherever calls don't depend on each other
+    # (see _lookup_established_coin / _lookup_new_token), so the remaining
+    # critical path is normally only 1-2 sequential hops - a single call
+    # eating 6s of an overall ~5s target budget is no longer tolerable.
+    #
+    # OVERALL_DEADLINE is a hard ceiling on top of that: even with
+    # parallelization, a genuinely slow upstream on the critical-path hop
+    # could still blow the budget. Racing against a fixed deadline turns
+    # that into a clean, fast 504 instead of an unpredictable multi-second
+    # hang - measured live (2026-07-20) this whole phase (verify + lookup +
+    # settle) needs to fit well under 5s total end to end.
+    OVERALL_DEADLINE = 4.0
+    async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
         if req.contract_address:
             # Caller already knows it's a contract address (chain optional -
             # auto-detected below if not given).
@@ -383,9 +403,19 @@ async def _sentiment_impl(req: SentimentRequest):
 
         # Fear & Greed has no dependency on the token lookup, so it runs
         # concurrently with it instead of adding its latency in front.
-        (name, symbol, category, sub_scores), fng_data = await asyncio.gather(
-            lookup, feargreed.get_fear_greed(client)
-        )
+        try:
+            (name, symbol, category, sub_scores), fng_data = await asyncio.wait_for(
+                asyncio.gather(lookup, feargreed.get_fear_greed(client)),
+                timeout=OVERALL_DEADLINE,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"Sentiment computation exceeded the {OVERALL_DEADLINE}s response budget "
+                    "- an upstream data source was too slow. Please retry."
+                ),
+            )
         if fng_data:
             fng = FearGreedContext(**fng_data, available=True)
         else:
