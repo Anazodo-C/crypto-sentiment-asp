@@ -14,7 +14,19 @@ Ran a real payment via `onchainos payment quote` / `payment pay` (operator walle
 - **Result: full success.** `txHash 0x6ecb2a1e9d231afbe962cd96c8b6414b9def2d49d2dffd1ad239a417af6a34d4`, real SOL sentiment score (45.6, Neutral-Negative) returned **synchronously in the same paid response** — no second 402, no silent failure.
 - Receipt shows `status: "pending"` (on-chain confirmation not yet final) while the app already returned `success` with the real data — exactly the intended async broadcast-and-return behavior from `sync_settle=False`, instead of blocking the request on confirmation.
 - Vercel logs confirm the new logging hooks work too: `x402 verify: is_valid=True ...` and `x402 settle: success=True status=pending transaction=0x6ecb2a1e... ...` both appeared — this is the exact diagnostic detail that was completely invisible during the rejection #4 failure.
-- **One unrelated, separate gap found and worked around during this test** (not a settlement bug): the app's 402 challenge doesn't advertise a Bazaar `outputSchema` for its required JSON body (`{"token": "..."}`), so a generic x402 client (like `onchainos payment quote`) can't auto-discover it — first attempt got a `422 Field required` from FastAPI (no funds moved, settlement is skipped on error responses). Worked around by passing `--param token=SOL` explicitly on `payment pay`. Real buyers/OKX's reviewer apparently get this right by reading `/info`'s documented body shape instead of relying on 402 auto-discovery, since the earlier failed test (buyer #6705) got past this stage into the actual settlement bug. Not fixed in code — just noting it exists, in case OKX's reviewer ever probes without reading `/info` first.
+- **One unrelated, separate gap found during this test, and since fixed** (not the settlement bug — see below): the app's 402 challenge doesn't advertise a Bazaar `outputSchema` for its required JSON body (`{"token": "..."}`), so a generic x402 client (like `onchainos payment quote`) can't auto-discover it — first attempt got a `422 Field required` from FastAPI (no funds moved, settlement is skipped on error responses).
+
+### 422 → 402 fix for malformed-but-paid requests (2026-07-20, commit `75560bd`)
+
+A verified-but-malformed request (payment attached, but body missing/invalid) was falling through to FastAPI's default `RequestValidationError` handling → bare `422`. Correct HTTP semantics in isolation, but reads as an x402 standards violation to a generic prober that only expects `{200, 402}` from a payment-gated route — plausibly part of what OKX's reviewer hit too, not just the settlement bug.
+
+Added `app/x402.py`'s `malformed_request_response()` — reuses the SDK's own `build_payment_requirements()` / `create_payment_required_response()` / `encode_payment_required_header()` to return a **real, spec-correct 402 + `PAYMENT-REQUIRED` header** (not hand-assembled) instead of the 422. Wired via a `RequestValidationError` handler in `app/main.py` for the POST paths, and explicitly in `sentiment_get()` for the GET path (query-param validation raises pydantic's `ValidationError` directly, not FastAPI's `RequestValidationError`, so it needed its own branch).
+
+**Verified twice before trusting it:**
+1. Locally via `TestClient` against all three gated routes with missing body/params — confirmed `402` + valid `PAYMENT-REQUIRED` header on each, and an unrelated 404 route unaffected.
+2. Live in production: reproduced the exact original failure (`payment quote`/`payment pay` against `/sentiment` with no `token` param) — now returns `HTTP 402` (`"facilitator non-terminal: HTTP 402"` from the CLI's perspective, `status: "pending"`, `txHash: null` — no funds moved), not the earlier `422`.
+
+Deployed and confirmed live.
 
 ### Root cause of rejection #4 (found by log correlation, 2026-07-20)
 
