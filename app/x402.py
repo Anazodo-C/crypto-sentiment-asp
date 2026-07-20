@@ -37,10 +37,13 @@ Required env vars when X402_ENABLED=true:
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+
+logger = logging.getLogger("crypto_sentiment_asp.x402")
 
 
 def is_enabled() -> bool:
@@ -90,6 +93,50 @@ class PaymentRequiredBodyMiddleware(BaseHTTPMiddleware):
         )
 
 
+def _wrap_with_logging(server) -> None:
+    """Registers the SDK's own before/after/failure hooks purely to log
+    verify/settle outcomes at INFO/ERROR - no behavior change.
+
+    Without this, a settlement failure is invisible: PaymentMiddlewareASGI
+    (x402/http/middleware/fastapi.py) catches it internally and returns a
+    bare 402 with no logged reason, so even a correctly-configured Vercel
+    log stream only ever shows "verify succeeded" and then nothing - which
+    is exactly what happened during the 2026-07-19 16:28 UTC test failure
+    that preceded the 4th rejection. These hooks run inside the SDK's own
+    generator-based dispatch (server.py `_settle_payment_core` /
+    `_verify_payment_core`), so they see the real error_reason before it's
+    discarded.
+    """
+    from x402.schemas import SettleFailureContext, SettleResultContext, VerifyFailureContext, VerifyResultContext
+
+    async def _after_verify(ctx: VerifyResultContext) -> None:
+        r = ctx.result
+        logger.info(
+            "x402 verify: is_valid=%s payer=%s invalid_reason=%s",
+            r.is_valid, r.payer, r.invalid_reason,
+        )
+
+    async def _verify_failed(ctx: VerifyFailureContext):
+        logger.error("x402 verify FAILED: %s", ctx.error)
+        return None  # no recovery - just observing
+
+    async def _after_settle(ctx: SettleResultContext) -> None:
+        r = ctx.result
+        logger.info(
+            "x402 settle: success=%s status=%s transaction=%s network=%s payer=%s",
+            r.success, getattr(r, "status", None), r.transaction, r.network, r.payer,
+        )
+
+    async def _settle_failed(ctx: SettleFailureContext):
+        logger.error("x402 settle FAILED: %s", ctx.error)
+        return None  # no recovery - just observing; surfaces the real reason instead of a silent 402
+
+    server.on_after_verify(_after_verify)
+    server.on_verify_failure(_verify_failed)
+    server.on_after_settle(_after_settle)
+    server.on_settle_failure(_settle_failed)
+
+
 def build_middleware():
     """Returns (middleware_class, kwargs_dict) for app.add_middleware(...),
     or None if x402 is disabled. Raises RuntimeError with a clear message
@@ -129,11 +176,26 @@ def build_middleware():
         secret_key=os.environ["OKX_SECRET_KEY"],
         passphrase=os.environ["OKX_PASSPHRASE"],
     )
-    facilitator = OKXFacilitatorClient(OKXFacilitatorConfig(auth=auth))
+    # sync_settle=False (SDK default is True): with sync settlement, OKX's
+    # /settle call blocks the entire request until the on-chain tx is
+    # confirmed on X Layer before responding - inside a Vercel serverless
+    # function this competes with the same request-duration budget as the
+    # sentiment lookup itself. A real test payment (2026-07-19 16:28 UTC,
+    # buyer agent 6705, tx 0x49a297...) verified successfully (facilitator
+    # /verify returned 200) but the caller never received a score and got a
+    # bare 402 on retry - consistent with settlement blocking/timing out
+    # after verify succeeded, since PaymentMiddlewareASGI silently discards
+    # the already-computed response and returns an empty 402 whenever
+    # process_settlement() fails or throws for ANY reason (see
+    # x402/http/middleware/fastapi.py). Async settlement returns as soon as
+    # the tx is broadcast instead of waiting for confirmation, removing
+    # that blocking wait from the request's critical path.
+    facilitator = OKXFacilitatorClient(OKXFacilitatorConfig(auth=auth, sync_settle=False))
 
     server = x402ResourceServer(facilitator)
     server.register("eip155:196", ExactEvmScheme())  # X Layer
     server.initialize()
+    _wrap_with_logging(server)
 
     price = os.getenv("X402_PRICE_USDC", "0.1")
     pay_to = os.environ["X402_RECEIVING_ADDRESS"]
