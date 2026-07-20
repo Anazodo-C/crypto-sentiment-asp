@@ -6,7 +6,15 @@ Session resumption notes. Agent identity: **#6370** ("Sentimento", ASP role) on 
 
 ## Status as of this session (2026-07-20)
 
-**Rejection #4 landed** (`approvalDisplayStatus: 5`, checked ~14:41 UTC) — same bundled boilerplate as before ("not passed x402 standard validation" + "unable to receive a response, task timed out"). Root cause was found and fixed (see below); the freeze from the prior session ("no changes until verdict comes back") is lifted now that the verdict is in. **Not yet resubmitted** — resubmit once you're satisfied the fix holds (see Testing section below for how to re-verify before resubmitting a 5th time).
+**Rejection #4 landed** (`approvalDisplayStatus: 5`, checked ~14:41 UTC) — same bundled boilerplate as before ("not passed x402 standard validation" + "unable to receive a response, task timed out"). Root cause was found and fixed (see below), and **the fix is now confirmed live with a real end-to-end paid call** — the freeze from the prior session ("no changes until verdict comes back") is lifted. Ready to resubmit (5th time) once you say go.
+
+### Live re-verification (2026-07-20, ~16:44 UTC) — fix confirmed working
+
+Ran a real payment via `onchainos payment quote` / `payment pay` (operator wallet, 0.1 USD₮0, token=SOL) directly against `POST /sentiment`:
+- **Result: full success.** `txHash 0x6ecb2a1e9d231afbe962cd96c8b6414b9def2d49d2dffd1ad239a417af6a34d4`, real SOL sentiment score (45.6, Neutral-Negative) returned **synchronously in the same paid response** — no second 402, no silent failure.
+- Receipt shows `status: "pending"` (on-chain confirmation not yet final) while the app already returned `success` with the real data — exactly the intended async broadcast-and-return behavior from `sync_settle=False`, instead of blocking the request on confirmation.
+- Vercel logs confirm the new logging hooks work too: `x402 verify: is_valid=True ...` and `x402 settle: success=True status=pending transaction=0x6ecb2a1e... ...` both appeared — this is the exact diagnostic detail that was completely invisible during the rejection #4 failure.
+- **One unrelated, separate gap found and worked around during this test** (not a settlement bug): the app's 402 challenge doesn't advertise a Bazaar `outputSchema` for its required JSON body (`{"token": "..."}`), so a generic x402 client (like `onchainos payment quote`) can't auto-discover it — first attempt got a `422 Field required` from FastAPI (no funds moved, settlement is skipped on error responses). Worked around by passing `--param token=SOL` explicitly on `payment pay`. Real buyers/OKX's reviewer apparently get this right by reading `/info`'s documented body shape instead of relying on 402 auto-discovery, since the earlier failed test (buyer #6705) got past this stage into the actual settlement bug. Not fixed in code — just noting it exists, in case OKX's reviewer ever probes without reading `/info` first.
 
 ### Root cause of rejection #4 (found by log correlation, 2026-07-20)
 
