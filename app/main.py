@@ -17,6 +17,12 @@ from app.frontend import INDEX_HTML
 from app.schemas import FearGreedContext, SentimentRequest, SentimentResponse
 
 load_dotenv()
+# Explicit level, not left to the ASGI host's default: without this, INFO-level
+# logs (including the x402 verify/settle outcome logging in app/x402.py) can be
+# silently dropped depending on how the runtime configures the root logger,
+# which is exactly the kind of gap that left the 2026-07-19 settlement failure
+# undiagnosable from Vercel's log stream.
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("crypto_sentiment_asp")
 
 # EVM addresses are unambiguous (0x + 40 hex). Solana mint addresses are
