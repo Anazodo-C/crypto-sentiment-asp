@@ -9,6 +9,8 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import ValidationError
 
@@ -82,6 +84,22 @@ except Exception as e:
         "integration, then redeploy."
     )
     x402_status = "failed_fallback_free"
+
+
+# A request to a payment-gated route with a verified payment attached but a
+# missing/invalid body (e.g. no `token`) would otherwise fall through to
+# FastAPI's default RequestValidationError handling and return a bare 422 -
+# see app/x402.py's malformed_request_response() docstring for why that
+# reads as an x402 standards violation to a generic prober. Scoped to only
+# the payment-gated paths; every other route keeps FastAPI's normal 422.
+_X402_GATED_PATHS = {"/", "/sentiment"}
+
+
+@app.exception_handler(RequestValidationError)
+async def _malformed_body_on_gated_route(request: Request, exc: RequestValidationError):
+    if x402_status == "enabled" and request.url.path in _X402_GATED_PATHS:
+        return x402.malformed_request_response(str(request.url))
+    return await request_validation_exception_handler(request, exc)
 
 
 _PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
@@ -313,6 +331,7 @@ async def sentiment(req: SentimentRequest, request: Request):
 
 @app.get("/sentiment", response_model=SentimentResponse)
 async def sentiment_get(
+    request: Request,
     token: str | None = None,
     contract_address: str | None = None,
     chain: str | None = None,
@@ -331,6 +350,12 @@ async def sentiment_get(
             token=token, contract_address=contract_address, chain=chain, category_hint=category_hint
         )
     except ValidationError as e:
+        # Query params (not body), so this raises pydantic's ValidationError
+        # directly rather than FastAPI's RequestValidationError - the global
+        # handler above doesn't see it, so the same 402-instead-of-422 logic
+        # is applied here explicitly. See app/x402.py's malformed_request_response().
+        if x402_status == "enabled":
+            return x402.malformed_request_response(str(request.url))
         raise HTTPException(status_code=422, detail=e.errors())
     return await _sentiment_impl(req)
 

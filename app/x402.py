@@ -45,6 +45,12 @@ from starlette.responses import JSONResponse
 
 logger = logging.getLogger("crypto_sentiment_asp.x402")
 
+# Set by build_middleware() when x402 is enabled - reused by
+# malformed_request_response() below to build a fresh, real 402 challenge
+# for a paid-but-malformed request without re-deriving these from scratch.
+_server = None
+_payment_option = None
+
 
 def is_enabled() -> bool:
     return os.getenv("X402_ENABLED", "false").lower() == "true"
@@ -91,6 +97,50 @@ class PaymentRequiredBodyMiddleware(BaseHTTPMiddleware):
             },
             headers=headers,
         )
+
+
+def malformed_request_response(url: str) -> JSONResponse:
+    """Standard x402 402 challenge for a request that reached this route
+    with a verified payment attached but a missing/invalid business body
+    (e.g. no `token`).
+
+    Without this, such a request falls through to FastAPI's default
+    RequestValidationError handling and gets a bare 422 - which is a
+    correct HTTP status for a malformed request in general, but reads as
+    "this endpoint doesn't implement x402 correctly" to a generic x402
+    prober or validator that only expects {200, 402} from a payment-gated
+    route and has no way to discover this service's specific body shape
+    (this app doesn't advertise one via a Bazaar outputSchema). Reuses the
+    SDK's own PaymentRequired/encode_payment_required_header so the
+    PAYMENT-REQUIRED header is real and spec-correct, not hand-assembled.
+    """
+    from x402.http.utils import encode_payment_required_header
+    from x402.schemas import ResourceInfo
+
+    requirements = _server.build_payment_requirements(_payment_option)
+    resource = ResourceInfo(
+        url=url,
+        description="Crypto sentiment analysis (per-call)",
+        mime_type="application/json",
+    )
+    payment_required = _server.create_payment_required_response(
+        requirements,
+        resource,
+        'Missing or invalid request body - expected {"token": "<ticker or contract address>"} '
+        'or {"contract_address": "0x..."}.',
+    )
+    return JSONResponse(
+        status_code=402,
+        headers={"PAYMENT-REQUIRED": encode_payment_required_header(payment_required)},
+        content={
+            "error": "Payment Required",
+            "message": (
+                'Malformed request body. Expected JSON like {"token": "SOL"} or '
+                '{"contract_address": "0x..."}. Decode the PAYMENT-REQUIRED header '
+                "for the payment challenge if you haven't already paid."
+            ),
+        },
+    )
 
 
 def _wrap_with_logging(server) -> None:
@@ -206,6 +256,10 @@ def build_middleware():
         price=f"${price}",
         network="eip155:196",
     )
+
+    global _server, _payment_option
+    _server = server
+    _payment_option = payment_option
 
     # POST /sentiment is the real API contract (see app/main.py). GET
     # /sentiment and POST / are aliases gated identically, only so a
