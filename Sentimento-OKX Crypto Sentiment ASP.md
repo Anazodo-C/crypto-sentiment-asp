@@ -6,7 +6,15 @@ Session resumption notes. Agent identity: **#6370** ("Sentimento", ASP role) on 
 
 ## Status as of this session (2026-07-20)
 
-**Rejection #4 landed** (`approvalDisplayStatus: 5`, checked ~14:41 UTC) — same bundled boilerplate as before ("not passed x402 standard validation" + "unable to receive a response, task timed out"). Root cause was found and fixed (see below), and **the fix is now confirmed live with a real end-to-end paid call** — the freeze from the prior session ("no changes until verdict comes back") is lifted. Ready to resubmit (5th time) once you say go.
+**Rejection #4 landed** (`approvalDisplayStatus: 5`, checked ~14:41 UTC) — same bundled boilerplate as before ("not passed x402 standard validation" + "unable to receive a response, task timed out"). Root cause was found and fixed (see below), and **the fix is now confirmed live with a real end-to-end paid call** — the freeze from the prior session ("no changes until verdict comes back") is lifted. **A second, independent audit (agent #6705 role-playing OKX's reviewer, cross-verified against server/droplet logs) confirmed all 4 rejection categories now pass.** Ready to resubmit (5th time) once you say go.
+
+### Response-time optimization (2026-07-21, commit `9bd6007`)
+
+Real requirement: **≤5s response time.** Measured baseline via a real timed paid call: **9.4s total** (CLI wall time), with the merchant-side business-logic phase alone (verify → 2 sequential CoinGecko calls → settle) taking ~6s.
+
+Root cause: `_lookup_established_coin` and `_lookup_new_token` chained several external calls *sequentially* that don't actually depend on each other — `get_coin_data`/Twitter both only need the `resolve_coin_id` result; `get_token_pools`/Twitter/CoinGecko-enrich all only need `get_token`'s result. Parallelized both via `asyncio.gather`. Also dropped the per-call httpx timeout 6.0s → 3.0s, and added a hard 4.0s overall deadline (`asyncio.wait_for`) around the lookup+Fear&Greed gather — on timeout, returns a clean `504` instead of an unpredictable hang (a 504 is `>=400`, so the x402 SDK's existing "don't settle on error responses" behavior means a timed-out request is never charged).
+
+**Result, measured live, two consecutive real paid requests post-deploy:** 4.9s and 3.7s total (down from 9.4s baseline) — business-logic phase alone measured at ~2.6s server-side via Vercel logs (down from ~6s). Verified correct output (5/5 dimensions scored) on both the established-coin and new-token paths locally before deploying.
 
 ### Live re-verification (2026-07-20, ~16:44 UTC) — fix confirmed working
 
