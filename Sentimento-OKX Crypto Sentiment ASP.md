@@ -4,9 +4,27 @@ Session resumption notes. Agent identity: **#6370** ("Sentimento", ASP role) on 
 
 **Hackathon: OKX.AI Genesis Hackathon, $100K pool. Real deadline is July 27 2026, 23:59 UTC** — the project's own earlier notes said July 17, that was wrong (confirmed via web research: HackQuest / okx.ai/tutorial/asp).
 
-## Status as of this session (2026-07-20)
+## Status as of this session (2026-07-20 → 2026-07-21)
 
-**Rejection #4 landed** (`approvalDisplayStatus: 5`, checked ~14:41 UTC) — same bundled boilerplate as before ("not passed x402 standard validation" + "unable to receive a response, task timed out"). Root cause was found and fixed (see below), and **the fix is now confirmed live with a real end-to-end paid call** — the freeze from the prior session ("no changes until verdict comes back") is lifted. **A second, independent audit (agent #6705 role-playing OKX's reviewer, cross-verified against server/droplet logs) confirmed all 4 rejection categories now pass.** Ready to resubmit (5th time) once you say go.
+**Rejection #4 landed** (`approvalDisplayStatus: 5`, checked ~14:41 UTC 2026-07-20) — same bundled boilerplate as before ("not passed x402 standard validation" + "unable to receive a response, task timed out"). Root cause was found and fixed (see below), confirmed live with a real end-to-end paid call, independently audited, response time optimized, and **resubmitted for the 5th time** — see "5th resubmission" below for current status. The freeze from the prior session ("no changes until verdict comes back") is lifted.
+
+### 5th resubmission (2026-07-21, ~05:19 UTC)
+
+Ran from the droplet as `sentimento` (per the established pattern — the daemon and readiness checks are local-machine-scoped there, not on the Mac): `onchainos agent activate --agent-id 6370 --preferred-language en-US`.
+
+Hit the **known A2A-doctor false-negative again** (`communication is NOT ready` when run via a plain SSH/Bash-tool session, since `CLAUDE_CODE_OAUTH_TOKEN` isn't inherited — see the A2A section below, this is the same recurring issue, not new). Fixed the same way as documented: sourced `~/.config/okx-a2a.env` (the daemon's real environment) into the shell before running `activate`, which then passed the readiness check correctly.
+
+Response was a bit ambiguous at a glance (`activate.rejectReason` still showed the *old* rejection #4 text with `success:false`, alongside `submitApproval: [{"approvalStatus":2,"success":true}]`) — the `activate.rejectReason` field is just echoing the agent's state from *before* this call, not a new rejection. Confirmed via a fresh `agent get-agents --agent-ids 6370` right after: **`approvalDisplayStatus: 2`, "Listing under review"**. Submission succeeded.
+
+**Current status: under review, verdict pending.** Given the ~24h SLA OKX has used for past reviews, expect a result sometime 2026-07-21/22.
+
+### Independent pre-resubmission audit (2026-07-20, before the 5th submission)
+
+Before resubmitting, ran a genuinely independent black-box audit: a fresh subagent (no memory of this session, no access to our source code) operated as agent **#6705** ("Sentimento A2A Test User") role-playing OKX's own reviewer, testing all 4 historical rejection categories against agent #6370 as an outside party would. I cross-verified its every claim against server logs (Vercel), droplet daemon logs, and the official `onchainos agent x402-check` validator, rather than taking its report at face value.
+
+**Result: all 4 categories passed**, with one useful correction to the subagent's own account — our new logging showed the specific failure mode it triggered (paying with an unfunded wallet) is caught at **verify** (`x402 verify FAILED: insufficient_balance`), not settlement as it inferred from the outside. Full detail: `agent create-task` → `okx-a2a user watch` reached x402 agreement in **~57 seconds** (well inside any reasonable timeout — directly refutes rejection #4's "no response, task timed out"); unpaid probes on all three gated routes returned proper 402s; `x402-check` returned `valid:true`. One minor watch-item, not a failure: Sentimento's background `job_accepted` event processing took ~86s in the droplet logs (above the historical 40-60s baseline) — doesn't block the buyer-facing reply, but worth monitoring if OKX ever times out background processing specifically.
+
+**Process note**: this required switching the Mac's `onchainos` wallet session to agent #6705's owning account (`jaredjson77@gmail.com`) and back to the operator account afterward — each switch needs a fresh browser login (OTP/Google, relayed manually). One mistake made along the way: an initial `wallet add` (before realizing a full login-as-different-email was needed) created an unused, empty extra sub-account ("Account 2") under the operator identity — harmless (zero balance), just clutter, left as-is.
 
 ### Response-time optimization (2026-07-21, commit `9bd6007`)
 
@@ -49,9 +67,13 @@ Real evidence, not guesswork: during the 4th resubmission window (2026-07-19 16:
 - `app/main.py`: added `logging.basicConfig(level=logging.INFO)` so those logs aren't dropped depending on the ASGI host's default root logger level.
 - Verified post-deploy: `x402_status: "enabled"` (middleware still initializes cleanly with the new hooks) and the root `POST /` 402 challenge is still correct. **Not yet verified against a real end-to-end paid call** — that requires either a live test via agent #6705 again, or the OKX `x402-check` validator, before trusting this fully.
 
+### Resolved this session
+
+- **Droplet's Vercel log-poller's dead `VERCEL_TOKEN`** (had been erroring "token not valid" since 2026-07-19 22:18 UTC) — fixed 2026-07-20. `vercel tokens add` via CLI is blocked (403 - "Cannot create tokens for this app") for this project, so the user generated a new token manually via the Vercel dashboard (Account Settings → Tokens, scoped to the `trident8` team) and it was written into `~/.config/vercel-poll.env` on the droplet (via SSH stdin, never as a CLI arg — per the token-leak lesson below) and the service restarted. Confirmed working via two post-restart poll cycles with no errors.
+
 ### Still open
 
-- **Droplet's Vercel log-poller has a dead `VERCEL_TOKEN`** since 2026-07-19 22:18 UTC (`~/.config/vercel-poll.env` on the droplet, `sentimento` user) — every 2-minute poll has been erroring "token not valid" since then. `vercel tokens add` via CLI is blocked (403 - "Cannot create tokens for this app") for this project, so a new token needs to be generated manually via the Vercel dashboard (Account Settings → Tokens) and placed in that env file (env var only, never `--token` on the command line — see the prior token-leak lesson below).
+- None outstanding as of this session — waiting on OKX's verdict for the 5th resubmission.
 
 ## The three real prior rejections (pulled verbatim from XMTP messages, not the API's truncated field)
 
